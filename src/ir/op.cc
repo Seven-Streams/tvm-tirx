@@ -64,6 +64,12 @@ class OpRegistry {
 
   bool HasAttrMap(const ffi::String& name) const { return attrs_.count(name); }
 
+  ffi::Array<ffi::String> ListAttrNames() const {
+    ffi::Array<ffi::String> names;
+    for (const auto& [name, column] : attrs_) names.push_back(name);
+    return names;
+  }
+
   ffi::List<ffi::Any> GetAttrColumn(const ffi::String& name) const {
     auto column = attrs_.Get(name);
     TVM_FFI_CHECK(column.has_value(), InternalError)
@@ -321,6 +327,13 @@ TVM_FFI_STATIC_INIT_BLOCK() {
   refl::GlobalDef()
       .def("ir.GetOp", &Op::Get)
       .def("ir.ListOpNames", &Op::ListNames)
+      .def("ir.ListOpAttrNames", []() { return OpRegistry::Global()->ListAttrNames(); })
+      .def("ir.GetOpAttrColumn",
+           [](ffi::String name) -> ffi::Optional<ffi::List<ffi::Any>> {
+             OpRegistry* registry = OpRegistry::Global();
+             if (!registry->HasAttrMap(name)) return std::nullopt;
+             return registry->GetAttrColumn(name);
+           })
       .def("ir.RegisterOp",
            [](ffi::String name, ffi::String doc) {
              TVM_FFI_CHECK(!OpRegistry::Global()->Contains(name), AttributeError)

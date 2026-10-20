@@ -129,6 +129,68 @@ def test_op_set_signature_checks_counts_without_types_or_attrs():
     assert call.attrs is not None
 
 
+def test_op_attr_map_names_and_values():
+    names = tvm_tirx.ir.Op.list_attr_names()
+    assert {"TCallEffectKind", "TGlobalSymbol"} <= set(names)
+    for name in names:
+        assert tvm_tirx.ir.Op.get("prim.exp").has_attr(name)
+
+    attr_map = tvm_tirx.ir.Op.get_attr_map("TCallEffectKind")
+    assert attr_map.attr_name == "TCallEffectKind"
+    for op_name in tvm_tirx.ir.Op.list_op_names():
+        op = tvm_tirx.ir.Op.get(op_name)
+        value = op.get_attr("TCallEffectKind")
+        assert (op in attr_map) == (value is not None), op_name
+        assert attr_map.get(op) == value, op_name
+        if value is not None:
+            assert attr_map[op] == value, op_name
+
+    assert tvm_tirx.ir.Op.get_attr_map("test.MissingAttrMap") is None
+
+
+def test_op_attr_map_lookup_without_value():
+    key = "test.AttrMapLookup"
+    tvm_tirx.ir._ffi_api.RegisterOp("test.attr_map_lookup.set", "")
+    tvm_tirx.ir._ffi_api.RegisterOp("test.attr_map_lookup.unset", "")
+    tvm_tirx.ir.Op.get("test.attr_map_lookup.set").set_attr(key, 1)
+    unset = tvm_tirx.ir.Op.get("test.attr_map_lookup.unset")
+
+    attr_map = tvm_tirx.ir.Op.get_attr_map(key)
+    assert unset not in attr_map
+    assert attr_map.get(unset) is None
+    assert attr_map.get(unset, 5) == 5
+    with pytest.raises(KeyError, match="test.attr_map_lookup.unset"):
+        attr_map[unset]
+
+    # A non-Op expression has no attributes, as in C++ OpAttrMap::get(Expr, default).
+    var = tvm_tirx.ir.Var("x", tvm_tirx.ir.PrimType("int32"))
+    assert var not in attr_map
+    assert attr_map.get(var, 5) == 5
+
+
+def test_op_attr_map_is_live():
+    key = "test.LiveAttrMap"
+    tvm_tirx.ir._ffi_api.RegisterOp("test.live_attr_map.first", "")
+    first = tvm_tirx.ir.Op.get("test.live_attr_map.first")
+    assert key not in tvm_tirx.ir.Op.list_attr_names()
+    first.set_attr(key, 7)
+    assert key in tvm_tirx.ir.Op.list_attr_names()
+
+    attr_map = tvm_tirx.ir.Op.get_attr_map(key)
+    assert attr_map[first] == 7
+
+    # A cached map sees an Op registered later, an override and a removal.
+    tvm_tirx.ir._ffi_api.RegisterOp("test.live_attr_map.second", "")
+    second = tvm_tirx.ir.Op.get("test.live_attr_map.second")
+    assert second not in attr_map
+    second.set_attr(key, 8)
+    assert attr_map[second] == 8
+    first.set_attr(key, 9, override=True)
+    assert attr_map[first] == 9
+    first.reset_attr(key)
+    assert first not in attr_map
+
+
 def test_generated_op_api_constructs_dictionary_attrs():
     name = "test.python_dict_attrs_api"
     tvm_tirx.ir._ffi_api.RegisterOp(name, "Dictionary attribute API test")

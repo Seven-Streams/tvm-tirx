@@ -69,6 +69,38 @@ class Op(Expr):
         """
         return _ffi_api.ListOpNames()
 
+    @staticmethod
+    def list_attr_names():
+        """List registered attribute column names in unspecified order.
+
+        Returns
+        -------
+        list[str]
+            The attribute column names, such as ``"TCallEffectKind"``.
+        """
+        return _ffi_api.ListOpAttrNames()
+
+    @staticmethod
+    def get_attr_map(attr_name):
+        """Get the map from operators to their values of an attribute.
+
+        This is the Python counterpart of C++ ``Op::GetAttrMap``. The map reads the
+        registry's storage directly, so later registrations, overrides and removals
+        are visible through it, and it can be cached.
+
+        Parameters
+        ----------
+        attr_name : str
+            Attribute name, such as ``"TCallEffectKind"``.
+
+        Returns
+        -------
+        OpAttrMap or None
+            The attribute map, or None when no operator has registered the attribute.
+        """
+        column = _ffi_api.GetOpAttrColumn(attr_name)
+        return None if column is None else OpAttrMap(attr_name, column)
+
     def set_attr(self, attr_name, value, override=False):
         """Set an operator attribute.
 
@@ -137,6 +169,55 @@ class Op(Expr):
         value_tail = [] if var_args is None else list(parse_entry(var_args, "var_args"))
         type_tail = [] if var_ty_args is None else list(parse_entry(var_ty_args, "var_ty_args"))
         self._set_signature(arg_names, arg_docs, ty_arg_names, ty_arg_docs, value_tail, type_tail)
+
+
+class OpAttrMap:
+    """The values of one operator attribute, keyed by operator.
+
+    Mirrors C++ ``OpAttrMap``. Obtain one with :py:meth:`Op.get_attr_map`. Lookups
+    see later registrations, overrides and removals; register values with
+    :py:meth:`Op.set_attr`. Like the registry itself, the map is not synchronized
+    with concurrent registration.
+    """
+
+    def __init__(self, attr_name, column):
+        self._attr_name = attr_name
+        self._column = column
+
+    @property
+    def attr_name(self):
+        """The attribute name."""
+        return self._attr_name
+
+    def __contains__(self, op):
+        if not isinstance(op, Op):
+            return False
+        index = op.index
+        return index < len(self._column) and self._column[index] is not None
+
+    def __getitem__(self, op):
+        if op not in self:
+            name = op.name if isinstance(op, Op) else op
+            raise KeyError(f"Attribute {self._attr_name} has not been registered for {name}")
+        return self._column[op.index]
+
+    def get(self, expr, default=None):
+        """Get the attribute of an operator with a fallback.
+
+        Parameters
+        ----------
+        expr : Expr
+            The operator. Any other expression yields ``default``.
+
+        default : object
+            The value to return when ``expr`` is not an Op or has no value.
+
+        Returns
+        -------
+        object
+            The registered value or ``default``.
+        """
+        return self[expr] if expr in self else default
 
 
 def register_op_attr(op_name, attr_key, value=None, override=False):
