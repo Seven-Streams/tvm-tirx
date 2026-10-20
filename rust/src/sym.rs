@@ -619,3 +619,236 @@ impl Deref for IntSet {
     }
 }
 // tvm-ffi-stubgen(end)
+
+// Hand-written below this line (outside the stubgen blocks, never regenerated). Reflection gives
+// `sym.Analyzer` no fields or methods; its API is the family of `sym.Analyzer*` globals, which
+// stubgen does not bind, so the typed methods are spelled out here. `rustfmt` skips this module
+// (see `lib.rs`), so keep the layout by hand. Paths are spelled out in full so they can never
+// collide with the generated import section.
+
+impl Analyzer {
+    /// A fresh `sym::Analyzer`.
+    pub fn new() -> Result<Self> {
+        tvm_ffi::cached_global_func!("sym.Analyzer").call_tuple(())?.try_into()
+    }
+
+    /// `Bind(var, value)`; fails if `var` is already bound to something else.
+    pub fn bind(&self, var: &super::ir::Var, value: &Expr) -> Result<()> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerBind").call_tuple((
+            self.clone(),
+            var.clone(),
+            value.clone(),
+        ))?;
+        Ok(())
+    }
+
+    /// `Bind(var, range)`; fails if `var` is already bound to something else.
+    pub fn bind_range(&self, var: &super::ir::Var, range: &super::ir::Range) -> Result<()> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerBind").call_tuple((
+            self.clone(),
+            var.clone(),
+            range.clone(),
+        ))?;
+        Ok(())
+    }
+
+    /// `Simplify(expr, steps)`; the C++ default is two steps.
+    pub fn simplify(&self, expr: &Expr, steps: i32) -> Result<Expr> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerSimplify")
+            .call_tuple((self.clone(), expr.clone(), steps))?
+            .try_into()
+    }
+
+    pub fn rewrite_simplify(&self, expr: &Expr) -> Result<Expr> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerRewriteSimplify")
+            .call_tuple((self.clone(), expr.clone()))?
+            .try_into()
+    }
+
+    pub fn canonical_simplify(&self, expr: &Expr) -> Result<Expr> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerCanonicalSimplify")
+            .call_tuple((self.clone(), expr.clone()))?
+            .try_into()
+    }
+
+    pub fn const_int_bound(&self, expr: &Expr) -> Result<ConstIntBound> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerConstIntBound")
+            .call_tuple((self.clone(), expr.clone()))?
+            .try_into()
+    }
+
+    /// `const_int_bound.Update(var, bound, allow_override)`.
+    pub fn update_const_int_bound(
+        &self,
+        var: &super::ir::Var,
+        bound: &ConstIntBound,
+        allow_override: bool,
+    ) -> Result<()> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerConstIntBoundUpdate").call_tuple((
+            self.clone(),
+            var.clone(),
+            bound.clone(),
+            allow_override,
+        ))?;
+        Ok(())
+    }
+
+    pub fn modular_set(&self, expr: &Expr) -> Result<ModularSet> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerModularSet")
+            .call_tuple((self.clone(), expr.clone()))?
+            .try_into()
+    }
+
+    /// `int_set(expr, dom_map)`: evaluated over `dom_map` alone, ignoring this analyzer's own
+    /// bindings. On a fresh analyzer this is `sym::EvalSet(expr, dom_map)`.
+    pub fn int_set(
+        &self,
+        expr: &Expr,
+        dom_map: &tvm_ffi::Map<super::ir::Var, IntSet>,
+    ) -> Result<IntSet> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerIntSet")
+            .call_tuple((self.clone(), expr.clone(), dom_map.clone()))?
+            .try_into()
+    }
+
+    /// `CanProve(expr, strength)`; strength 0 is `ProofStrength::kDefault`.
+    pub fn can_prove(&self, expr: &Expr, strength: i32) -> Result<bool> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerCanProve")
+            .call_tuple((self.clone(), expr.clone(), strength))?
+            .try_into()
+    }
+
+    pub fn can_prove_equal(&self, lhs: &Expr, rhs: &Expr) -> Result<bool> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerCanProveEqual")
+            .call_tuple((self.clone(), lhs.clone(), rhs.clone()))?
+            .try_into()
+    }
+
+    /// `const_int_bound.IsBound(var)`: whether a bound was set for `var`.
+    pub fn const_int_bound_is_bound(&self, var: &super::ir::Var) -> Result<bool> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerConstIntBoundIsBound")
+            .call_tuple((self.clone(), var.clone()))?
+            .try_into()
+    }
+
+    /// `IterMapSimplify(indices, iters, predicate, level, *this, simplify_trivial_iterators)`:
+    /// the indices simplified as iterator maps of `iters` (`level` is the `IterMapLevel`), or
+    /// as they are when they are not.
+    pub fn iter_map_simplify(
+        &self,
+        indices: &tvm_ffi::Array<Expr>,
+        iters: tvm_ffi::Map<super::ir::Var, super::ir::Range>,
+        predicate: &Expr,
+        level: i32,
+        simplify_trivial_iterators: bool,
+    ) -> Result<tvm_ffi::Array<Expr>> {
+        tvm_ffi::cached_global_func!("sym.IterMapSimplify")
+            .call_tuple((
+                indices.clone(),
+                iters,
+                predicate.clone(),
+                level,
+                self.clone(),
+                simplify_trivial_iterators,
+            ))?
+            .try_into()
+    }
+
+    /// `CanProveGreaterEqual(expr, lower_bound)`, which has no global: an `IntImm` is compared
+    /// directly, anything else by the constant bound of its rewrite-simplified form.
+    pub fn can_prove_greater_equal(&self, expr: &Expr, lower_bound: i64) -> Result<bool> {
+        use tvm_ffi::ObjectRefCast as _;
+        if let Ok(imm) = expr.clone().try_cast::<super::ir::IntImm>() {
+            return Ok(imm.value >= tvm_ffi::BigInt::from(lower_bound));
+        }
+        let bound = self.const_int_bound(&self.rewrite_simplify(expr)?)?;
+        Ok(bound.min_value >= lower_bound)
+    }
+
+    /// `With<ConstraintContext>(analyzer, constraint)`: the analyzer assumes `constraint` until
+    /// the returned guard is dropped. Guards must be dropped in reverse order of creation, as
+    /// scoped Rust bindings are.
+    pub fn assume(&self, constraint: &Expr) -> Result<ConstraintContext> {
+        let exit: tvm_ffi::Function =
+            tvm_ffi::cached_global_func!("sym.AnalyzerEnterConstraintContext")
+                .call_tuple((self.clone(), constraint.clone()))?
+                .try_into()?;
+        Ok(ConstraintContext { exit })
+    }
+
+    /// `rewrite_simplify.SetMaximumRewriteSteps(steps)`; 0 means no limit.
+    pub fn set_maximum_rewrite_steps(&self, steps: i64) -> Result<()> {
+        tvm_ffi::cached_global_func!("sym.AnalyzerSetMaximumRewriteSteps")
+            .call_tuple((self.clone(), steps))?;
+        Ok(())
+    }
+}
+
+impl IntSet {
+    /// `IntSet::SinglePoint(value)`.
+    pub fn single_point(value: &Expr) -> Result<Self> {
+        tvm_ffi::cached_global_func!("sym.IntSetSinglePoint")
+            .call_tuple((value.clone(),))?
+            .try_into()
+    }
+
+    /// `IntervalSet(min, max)`, the raw constructor.
+    pub fn interval(min: &Expr, max: &Expr) -> Result<Self> {
+        tvm_ffi::cached_global_func!("sym.IntervalSet")
+            .call_tuple((min.clone(), max.clone()))?
+            .try_into()
+    }
+
+    /// `IntSet::min()`; an error unless this is an interval.
+    pub fn min(&self) -> Result<Expr> {
+        self.interval_set()?.min_value()
+    }
+
+    /// `IntSet::max()`; an error unless this is an interval.
+    pub fn max(&self) -> Result<Expr> {
+        self.interval_set()?.max_value()
+    }
+
+    /// C++ `TVM_FFI_ICHECK(as<IntervalSetObj>())`.
+    fn interval_set(&self) -> Result<IntervalSet> {
+        use tvm_ffi::ObjectRefCast as _;
+        self.clone()
+            .try_cast()
+            .map_err(|_| error!(tvm_ffi::INTERNAL_ERROR, "Check failed: (s_int) is false: "))
+    }
+}
+
+/// A constraint the analyzer assumes while this guard lives (`With<ConstraintContext>`).
+#[must_use = "the constraint is dropped, and so left, immediately"]
+pub struct ConstraintContext {
+    exit: tvm_ffi::Function,
+}
+
+impl Drop for ConstraintContext {
+    fn drop(&mut self) {
+        // Leaving only pops the analyzer's constraint stacks; like the C++ destructor during
+        // unwinding, a failure here is not reported.
+        let _ = self.exit.call_tuple(());
+    }
+}
+
+/// `tirx::DetectLinearEquation(expr, vars)`: the coefficients of `vars` and the constant term
+/// when `expr` is linear in them, otherwise no coefficients.
+pub fn detect_linear_equation(
+    expr: &Expr,
+    vars: &tvm_ffi::Array<super::ir::Var>,
+) -> Result<tvm_ffi::Array<Expr>> {
+    tvm_ffi::cached_global_func!("tirx.analysis.DetectLinearEquation")
+        .call_tuple((expr.clone(), vars.clone()))?
+        .try_into()
+}
+
+/// `SymbolicLimits::pos_inf_`, the expression interval bounds use for +infinity.
+pub fn pos_inf() -> Result<Expr> {
+    tvm_ffi::cached_global_func!("sym.PosInf").call_tuple(())?.try_into()
+}
+
+/// `SymbolicLimits::neg_inf_`, the expression interval bounds use for -infinity.
+pub fn neg_inf() -> Result<Expr> {
+    tvm_ffi::cached_global_func!("sym.NegInf").call_tuple(())?.try_into()
+}
