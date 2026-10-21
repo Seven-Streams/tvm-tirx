@@ -23,11 +23,10 @@ use tvm_tirx::ir::transform::*;
 use tvm_tirx::ir::IRModule;
 
 use super::{logging_pass, Log};
-use crate::common::{empty_module, load_tirx_compiler, serial};
+use crate::common::{empty_module, serial};
 
 #[test]
 fn instruments() {
-    load_tirx_compiler();
     let _serial = serial();
     let log = Log::default();
     let hook = |log: &Log, entry: &'static str| {
@@ -76,7 +75,6 @@ fn instruments() {
 
 #[test]
 fn pass_timing() {
-    load_tirx_compiler();
     let _serial = serial();
     let log = Log::default();
     let timing = pass_timing_instrument().unwrap();

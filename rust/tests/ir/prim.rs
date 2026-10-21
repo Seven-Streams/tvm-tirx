@@ -29,7 +29,7 @@ use tvm_tirx::ir::{Expr, FloatImm, IntImm, PrimType, Var};
 use tvm_tirx::tvm_ffi::{BigInt, DLDataType, DLDataTypeExt, ObjectRefCast, String as FfiString};
 
 use super::loc;
-use crate::common::{global, load_tirx_compiler, serial};
+use crate::common::{global, serial};
 
 fn ty(dtype: &str) -> PrimType {
     PrimType::from_dtype(DLDataType::try_from_str(dtype).unwrap()).unwrap()
@@ -73,7 +73,6 @@ fn int_value(expr: Expr) -> i64 {
 
 #[test]
 fn expr_deep_equal() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", "int32");
     let a = prim::op::add(&x, int("int32", 1), loc()).unwrap();

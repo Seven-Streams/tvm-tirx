@@ -23,12 +23,11 @@ use tvm_tirx::ir::prim;
 use tvm_tirx::ir::Expr;
 
 use super::{dtype, int, var};
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 use crate::loc;
 
 #[test]
 fn vector_constructors() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", "int32");
     let ramp = prim::Ramp::new(&x, int("int32", 1), int("int32", 4), loc()).unwrap();

@@ -23,11 +23,10 @@ use tvm_tirx::ir::*;
 use tvm_tirx::tvm_ffi::Any;
 
 use super::{dtype, int32, int32_var, loc, op, tensor_var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn expressions() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = int32_var("x");
     assert_eq!(x.name.as_str(), "x");
@@ -70,7 +69,6 @@ fn expressions() {
 
 #[test]
 fn ranges() {
-    load_tirx_compiler();
     let _serial = serial();
     let range = Range::new(int32(8), None, loc()).unwrap();
     assert!(structural_equal(&range.extent, &int32(8)));

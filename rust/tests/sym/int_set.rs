@@ -24,11 +24,10 @@ use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::{Map, Object, ObjectRefCast};
 
 use super::{fixture, imm, int32, loc, op, range, var, Fixture};
-use crate::common::{assert_type_contracts, global, load_tirx_compiler};
+use crate::common::{assert_type_contracts, global};
 
 #[test]
 fn generated_types_match_the_registry() {
-    load_tirx_compiler();
     // `sym.IntSet` registers no layout of its own, so its subclasses are opaque too.
     assert_type_contracts!(false; IntSetObj: Object, IntervalSetObj: IntSetObj);
 }
@@ -56,7 +55,6 @@ fn interval_sets_are_read_through_accessors() {
 
 #[test]
 fn int_sets() {
-    load_tirx_compiler();
     let analyzer = Analyzer::new().unwrap();
     let interval = IntervalSet::new(int32(0), int32(10)).unwrap();
     assert!(analyzer.can_prove_equal(interval.min_value().unwrap(), int32(0)).unwrap());
@@ -94,7 +92,6 @@ fn int_sets() {
 
 #[test]
 fn region_bounds() {
-    load_tirx_compiler();
     let x = var("x");
     let var_dom = Map::from_iter([(x.clone(), range(0, 16))]);
     let region = [Range::from_complete_fields(x.clone().into(), int32(1), loc())];

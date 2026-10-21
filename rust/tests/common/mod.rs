@@ -22,30 +22,11 @@
 #![allow(dead_code)]
 
 use std::mem::size_of;
-use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 
 use tvm_tirx::ir::{BaseFunc, GlobalInfo, GlobalVar, IRModule};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::{TVMFFIGetTypeInfo, TVMFFITypeInfo};
-use tvm_tirx::tvm_ffi::{
-    AnyCompatible, AnyView, Array, Function, Map, Module, ObjectCore, String as FfiString,
-};
-
-static TIRX_COMPILER: OnceLock<Module> = OnceLock::new();
-
-/// Load `libtvm_tirx_compiler` so its type keys are in the FFI type registry.
-pub fn load_tirx_compiler() {
-    TIRX_COMPILER.get_or_init(|| {
-        let default = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("build")
-            .join("lib")
-            .join("libtvm_tirx_compiler.so");
-        let library =
-            std::env::var_os("TVM_TIRX_COMPILER_LIBRARY").map(PathBuf::from).unwrap_or(default);
-        Module::load_from_file(library.to_string_lossy()).unwrap()
-    });
-}
+use tvm_tirx::tvm_ffi::{AnyCompatible, AnyView, Array, Function, Map, ObjectCore, String as FfiString};
 
 /// Run the tests of a binary one at a time: registering an operator, a memory scope or the layout
 /// axes of a backend grows a native registry, which other threads must not read meanwhile, and

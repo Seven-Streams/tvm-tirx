@@ -22,11 +22,10 @@
 use tvm_tirx::ir::{FuncType, MissingType, NoneType, PrimType, PtrType, TensorRegionType, TupleType};
 
 use super::{dtype, loc, scope};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn types() {
-    load_tirx_compiler();
     let _serial = serial();
     MissingType::new().unwrap();
     NoneType::instance().unwrap();

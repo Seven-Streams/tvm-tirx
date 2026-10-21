@@ -22,12 +22,11 @@
 
 use tvm_tirx::tirx::analysis;
 
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 use crate::{as_i64, int32, module_of, op, prim_type, var, void_function};
 
 #[test]
 fn well_formedness() {
-    load_tirx_compiler();
     let _serial = serial();
     let func = void_function(vec![var("x", prim_type("int32"))]);
     assert!(analysis::verify_memory(&func).unwrap());
@@ -37,7 +36,6 @@ fn well_formedness() {
 
 #[test]
 fn expression_analyses() {
-    load_tirx_compiler();
     let _serial = serial();
     let (x, y) = (var("x", prim_type("int32")), var("y", prim_type("int32")));
     let undefined = analysis::undefined_vars(op("prim._OpAdd", &x, &y), [x.clone()]).unwrap();

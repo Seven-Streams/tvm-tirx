@@ -21,11 +21,10 @@
 
 use tvm_tirx::tirx::ThreadScope;
 
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 
 #[test]
 fn thread_scopes() {
-    load_tirx_compiler();
     let _serial = serial();
     let warp = ThreadScope::get("cuda.warp").unwrap();
     let cta = ThreadScope::get("cuda.cta").unwrap();

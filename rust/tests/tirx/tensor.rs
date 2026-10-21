@@ -22,11 +22,10 @@
 use tvm_tirx::tirx::{tensor_is_scalar, Layout, TensorType};
 
 use super::{int32, loc, memory_scope, prim_type, tile_8x8, var};
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 
 #[test]
 fn tensor_types() {
-    load_tirx_compiler();
     let _serial = serial();
     let scope = memory_scope();
     let ty = TensorType::new([int32(1)], prim_type("float32"), &scope, 0, None, loc()).unwrap();

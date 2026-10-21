@@ -23,12 +23,11 @@ use tvm_tirx::ir::transform::Pass;
 use tvm_tirx::target::Target;
 use tvm_tirx::tirx::transform as tx;
 
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 use crate::{module_of, void_function};
 
 #[test]
 fn passes() {
-    load_tirx_compiler();
     let _serial = serial();
     let target = Target::new("llvm").unwrap();
     let passes: Vec<Pass> = vec![
@@ -67,7 +66,6 @@ fn passes() {
 
 #[test]
 fn filter() {
-    load_tirx_compiler();
     let _serial = serial();
     let func = void_function(vec![]);
     let kept = tx::filter(|_func| Ok(true)).unwrap().run(module_of("main", &func)).unwrap();

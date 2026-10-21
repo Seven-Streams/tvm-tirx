@@ -21,11 +21,10 @@
 
 use tvm_tirx::ir::UniqueNameSupply;
 
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 
 #[test]
 fn unique_names() {
-    load_tirx_compiler();
     let _serial = serial();
     let names = UniqueNameSupply::new("p").unwrap();
     let fresh = names.fresh_name("x", true, true).unwrap();

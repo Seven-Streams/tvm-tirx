@@ -25,12 +25,11 @@ use std::sync::Arc;
 use tvm_tirx::ir::transform::{Pass, PassInfo};
 use tvm_tirx::tirx::transform::FunctionPass;
 
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 use crate::{module_of, void_function};
 
 #[test]
 fn function_passes() {
-    load_tirx_compiler();
     let _serial = serial();
     let func = void_function(vec![]);
     let runs = Arc::new(AtomicUsize::new(0));

@@ -21,11 +21,10 @@
 
 use tvm_tirx::ir::Op;
 
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 
 #[test]
 fn ops() {
-    load_tirx_compiler();
     let _serial = serial();
     let op_names = Op::list_op_names().unwrap();
     assert!(op_names.iter().any(|name| name.as_str() == "prim.exp"));

@@ -24,12 +24,11 @@ use tvm_tirx::ir::{Expr, FloatImm};
 use tvm_tirx::tvm_ffi::ObjectRefCast;
 
 use super::{dtype, float, int, int_value, ty, var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 use crate::loc;
 
 #[test]
 fn arithmetic_operators() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", "int32");
 
@@ -73,7 +72,6 @@ fn arithmetic_operators() {
 
 #[test]
 fn comparison_and_logic_operators() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", "int32");
     let one = int("int32", 1);
@@ -96,7 +94,6 @@ fn comparison_and_logic_operators() {
 
 #[test]
 fn casts_and_conversions() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", "int32");
     assert_eq!(dtype(&op::cast(&x, ty("float16"), loc()).unwrap()), "float16");
@@ -107,7 +104,6 @@ fn casts_and_conversions() {
 
 #[test]
 fn math_operators() {
-    load_tirx_compiler();
     let _serial = serial();
     let f = var("f", "float32");
     for unary in [op::ceil, op::floor, op::round, op::nearbyint, op::trunc] {

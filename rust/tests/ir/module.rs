@@ -23,11 +23,10 @@ use tvm_tirx::ir::{BaseFunc, Expr, GlobalInfo, GlobalVar, IRModule};
 use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
 
 use super::{function, int32, loc};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn modules() {
-    load_tirx_compiler();
     let _serial = serial();
     let func = function(0);
     let main = GlobalVar::new("main", loc()).unwrap();

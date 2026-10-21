@@ -23,11 +23,10 @@ use tvm_tirx::ir::transform::*;
 use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
 
 use super::{logging_pass, no_instruments, Log};
-use crate::common::{empty_module, load_tirx_compiler, serial};
+use crate::common::{empty_module, serial};
 
 #[test]
 fn pass_context_scope() {
-    load_tirx_compiler();
     let _serial = serial();
     let default_level = PassContext::current().unwrap().opt_level;
     let ctx = PassContext::create(3, ["a"], ["b"], no_instruments(), None).unwrap();
@@ -53,7 +52,6 @@ fn pass_context_scope() {
 
 #[test]
 fn module_and_sequential_passes() {
-    load_tirx_compiler();
     let _serial = serial();
     let log = Log::default();
     let first = logging_pass("first", &log);

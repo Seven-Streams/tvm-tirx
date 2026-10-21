@@ -22,11 +22,10 @@
 use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
 
 use super::{function, int32};
-use crate::common::{load_tirx_compiler, serial};
+use crate::common::serial;
 
 #[test]
 fn function_attrs() {
-    load_tirx_compiler();
     let _serial = serial();
     let func = function(0);
     let copy = func.copy().unwrap();

@@ -24,12 +24,11 @@ use tvm_tirx::tirx::tile::{as_tensor_region, configure_tensor_instruction};
 use tvm_tirx::tirx::TensorType;
 use tvm_tirx::tvm_ffi::Array;
 
-use crate::common::{global, load_tirx_compiler, serial, structural_equal};
+use crate::common::{global, serial, structural_equal};
 use crate::{int32, loc, memory_scope, prim_type, var};
 
 #[test]
 fn tensor_regions() {
-    load_tirx_compiler();
     let _serial = serial();
     let scope = memory_scope();
     let ty = TensorType::new([int32(4)], prim_type("float32"), &scope, 0, None, loc()).unwrap();
@@ -45,7 +44,6 @@ fn tensor_regions() {
 
 #[test]
 fn tensor_instructions() {
-    load_tirx_compiler();
     let _serial = serial();
     Op::register("rust.tests.tirx.instruction", "").unwrap();
     let instruction = Op::get("rust.tests.tirx.instruction").unwrap();

@@ -24,11 +24,10 @@ use tvm_tirx::tirx::{Axis, ComposeLayout, Iter, Layout, TileLayout};
 use tvm_tirx::tvm_ffi::{Map, String as FfiString};
 
 use super::{as_i64, int32, tile_8x8};
-use crate::common::{global, load_tirx_compiler, serial};
+use crate::common::{global, serial};
 
 #[test]
 fn memory_axes() {
-    load_tirx_compiler();
     let _serial = serial();
     let m = Axis::get("m").unwrap();
     assert!(m.is_memory().unwrap() && !m.is_thread().unwrap());
@@ -38,7 +37,6 @@ fn memory_axes() {
 
 #[test]
 fn layouts() {
-    load_tirx_compiler();
     let _serial = serial();
     let tile = tile_8x8();
     let layout = Layout::from(&tile);
@@ -71,7 +69,6 @@ fn layouts() {
 
 #[test]
 fn thread_layout_scope() {
-    load_tirx_compiler();
     let _serial = serial();
     global("tirx.cuda.RegisterLayoutAxes").call_tuple(()).unwrap();
     let laneid = Axis::get("laneid").unwrap();

@@ -25,12 +25,11 @@ use tvm_tirx::tirx::tile::DispatchContext;
 use tvm_tirx::tirx::{TensorType, ThreadScope};
 use tvm_tirx::tvm_ffi::{Any, Map, ObjectRefCast, String as FfiString};
 
-use crate::common::{global, load_tirx_compiler, serial, structural_equal};
+use crate::common::{global, serial, structural_equal};
 use crate::{int32, loc, memory_scope, prim_type, var};
 
 #[test]
 fn dispatch_contexts() {
-    load_tirx_compiler();
     let _serial = serial();
     let target = Target::new("cuda").unwrap();
     let warp = ThreadScope::get("cuda.warp").unwrap();

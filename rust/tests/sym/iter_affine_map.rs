@@ -24,11 +24,10 @@ use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::{Array, Map, Object, ObjectIdentity, ObjectRefCast};
 
 use super::{fixture, imm, int32, op, range, var, Fixture};
-use crate::common::{assert_type_contracts, global, load_tirx_compiler};
+use crate::common::{assert_type_contracts, global};
 
 #[test]
 fn generated_types_match_the_registry() {
-    load_tirx_compiler();
     assert_type_contracts!(true; IterMapResultObj: Object, IterMarkObj: Object);
     // The expression hierarchy registers no layout of its own, so the iterator expressions are
     // opaque.
@@ -89,7 +88,6 @@ fn iter_maps_decompose_into_marks_and_splits() {
 
 #[test]
 fn iter_maps() {
-    load_tirx_compiler();
     let analyzer = Analyzer::new().unwrap();
     let (x, y) = (var("x"), var("y"));
     let dom = Map::from_iter([(x.clone(), range(0, 4)), (y.clone(), range(0, 4))]);

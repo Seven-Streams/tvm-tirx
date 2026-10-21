@@ -21,11 +21,10 @@
 
 use tvm_tirx::ir::SourceName;
 
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn source_names() {
-    load_tirx_compiler();
     let _serial = serial();
     let name = SourceName::get("main.py").unwrap();
     assert_eq!(name.name.as_str(), "main.py");

@@ -26,7 +26,7 @@ mod common;
 use tvm_tirx::target::{self, Target, TargetKind, TargetKindObj, TargetObj};
 use tvm_tirx::tvm_ffi::{Any, Map, Object, ObjectRefCast, String as FfiString, TypeIndex};
 
-use common::{assert_type_contracts, empty_module, global, load_tirx_compiler};
+use common::{assert_type_contracts, empty_module, global};
 
 fn config(kind: &str) -> Map<FfiString, Any> {
     Map::from_iter([(FfiString::from("kind"), Any::from(FfiString::from(kind)))])
@@ -39,14 +39,12 @@ fn native_target(name: &str) -> Target {
 
 #[test]
 fn generated_types_match_the_registry() {
-    load_tirx_compiler();
     // Both hold members reflection does not describe, so both bindings are opaque.
     assert_type_contracts!(false; TargetObj: Object, TargetKindObj: Object);
 }
 
 #[test]
 fn native_targets_are_read_through_accessors() {
-    load_tirx_compiler();
     let llvm = native_target("llvm");
     let kind: TargetKind = llvm.kind().unwrap();
     assert_eq!(kind.name().unwrap().as_str(), "llvm");
@@ -79,7 +77,6 @@ fn native_targets_are_read_through_accessors() {
 
 #[test]
 fn construction_and_queries() {
-    load_tirx_compiler();
     let llvm = Target::new("llvm").unwrap();
     assert_eq!(llvm.kind().unwrap().name().unwrap().as_str(), "llvm");
     assert_eq!(llvm.get_target_device_type().unwrap(), 1);
@@ -104,7 +101,6 @@ fn construction_and_queries() {
 
 #[test]
 fn scope_ends_on_drop() {
-    load_tirx_compiler();
     assert!(Target::current(true).unwrap().is_none());
     assert!(Target::current(false).is_err());
     {
@@ -117,7 +113,6 @@ fn scope_ends_on_drop() {
 
 #[test]
 fn tags() {
-    load_tirx_compiler();
     let tagged = target::register_tag("rust-test/llvm", &config("llvm"), true).unwrap();
     assert_eq!(tagged.kind().unwrap().name().unwrap().as_str(), "llvm");
     let tags = target::list_tags().unwrap();
@@ -127,7 +122,6 @@ fn tags() {
 
 #[test]
 fn build_by_kind() {
-    load_tirx_compiler();
     let c = Target::new("c").unwrap();
     target::build("c", empty_module(), &c).unwrap();
     target::build("llvm", empty_module(), Target::new("llvm").unwrap()).unwrap();

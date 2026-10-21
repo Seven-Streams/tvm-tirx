@@ -31,7 +31,7 @@ use tvm_tirx::ir::{Expr, IntImm, Location, PrimType, Range, Var};
 use tvm_tirx::sym::Analyzer;
 use tvm_tirx::tvm_ffi::{BigInt, DLDataType, DLDataTypeExt, String as FfiString};
 
-use common::{global, load_tirx_compiler};
+use common::global;
 
 fn loc() -> Location {
     global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap()
@@ -79,7 +79,6 @@ struct Fixture {
 
 /// An analyzer with `x` bound to `[0, 16)`, through the native functions only.
 fn fixture() -> Fixture {
-    load_tirx_compiler();
     let x = var("x");
     // A typed `Analyzer` handle goes through `call_tuple` like any other object.
     let analyzer: Analyzer = global("sym.Analyzer").call_tuple(()).unwrap().try_into().unwrap();

@@ -23,12 +23,11 @@ use tvm_tirx::ir::prim;
 use tvm_tirx::ir::Expr;
 
 use super::{dtype, float, int, ty, var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 use crate::loc;
 
 #[test]
 fn node_constructors() {
-    load_tirx_compiler();
     let _serial = serial();
     let (x, y) = (var("x", "int32"), var("y", "int32"));
     let (p, q) = (var("p", "bool"), var("q", "bool"));

@@ -24,11 +24,10 @@ use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::Object;
 
 use super::{fixture, int32, op, range, var, Fixture};
-use crate::common::{assert_type_contracts, global, load_tirx_compiler};
+use crate::common::{assert_type_contracts, global};
 
 #[test]
 fn generated_types_match_the_registry() {
-    load_tirx_compiler();
     assert_type_contracts!(true;
         ConstIntBoundObj: Object, ModularSetObj: Object, RewriteSimplifierStatsObj: Object,
     );
@@ -86,7 +85,6 @@ fn rust_allocated_bounds_reach_the_native_analyzer() {
 
 #[test]
 fn bounds_and_simplification() {
-    load_tirx_compiler();
     let analyzer = Analyzer::new().unwrap();
     let x = var("x");
     analyzer.bind_range(&x, &range(0, 16), false).unwrap();
@@ -113,7 +111,6 @@ fn bounds_and_simplification() {
 
 #[test]
 fn scopes_end_on_drop() {
-    load_tirx_compiler();
     let analyzer = Analyzer::new().unwrap();
     let x = var("x");
     let x_mod_3 = op("prim._OpFloorMod", &x, int32(3));

@@ -36,17 +36,25 @@
 //!
 //! # Using the bindings
 //!
-//! Load `libtvm_tirx_compiler` before using these types, so that their type keys are registered,
-//! and keep the module alive while its objects are in use. The native global functions have Rust
-//! wrappers, as methods of the handle types and as functions of the modules, such as
-//! [`target::Target::new`] for `target.Target`. Native functions that have no Rust wrapper are
-//! called through [`tvm_ffi::Function::get_global`]. From `rust/` on Linux:
+//! The crate links `libtvm_tirx_compiler`, so its type keys and global functions are registered
+//! when a program starts. The build script finds the library through `tvm-tirx-config --libdir`,
+//! as `tvm-ffi-sys` finds libtvm_ffi through `tvm-ffi-config --libdir`: both helpers come with
+//! their Python packages (`apache-tvm-tirx` and `apache-tvm-ffi`) and must be on `PATH` when the
+//! crate is built. The native global functions have Rust wrappers, as methods of the handle types
+//! and as functions of the modules, such as [`target::Target::new`] for `target.Target`. Native
+//! functions that have no Rust wrapper are called through [`tvm_ffi::Function::get_global`].
+//!
+//! The crate uses the library only through the TVM FFI registry, so a linker that drops
+//! unreferenced libraries (`--as-needed`, which rustc passes on Linux) keeps it only because
+//! the crate holds a reference to a symbol of it, the link anchor, that is linked along with the
+//! crate. A program that calls at least one wrapper therefore has the library as a dependency,
+//! at no run-time cost. A program that reaches the registry only through `tvm_ffi` itself,
+//! without calling a wrapper, must keep the library by other means, such as the linker
+//! arguments `tvm-tirx-config --libs compiler` prints.
 //!
 //! ```no_run
 //! use tvm_tirx::target::Target;
-//! use tvm_tirx::tvm_ffi::Module;
 //!
-//! let _compiler = Module::load_from_file("../build/lib/libtvm_tirx_compiler.so")?;
 //! let target = Target::new("llvm")?;
 //! assert_eq!(target.kind()?.name()?.as_str(), "llvm");
 //! # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
@@ -98,21 +106,44 @@
 //!
 //! # Tests
 //!
-//! Build `libtvm_tirx_compiler` first. The build scripts need `tvm-ffi-config` on `PATH`, which
-//! `uv run` provides from the `.venv`:
+//! Build `libtvm_tirx_compiler` first. The build scripts need `tvm-ffi-config` and
+//! `tvm-tirx-config` on `PATH`, which `uv run` provides from the `.venv` after the editable
+//! install, where `tvm-tirx-config --libdir` is `build/lib`:
 //!
 //! ```bash
 //! uv run --no-sync cargo test --manifest-path rust/Cargo.toml
 //! ```
 //!
-//! The tests load `build/lib/libtvm_tirx_compiler.so`; set `TVM_TIRX_COMPILER_LIBRARY` to load
-//! another library.
+//! Set `TVM_TIRX_LIBRARY_PATH` to the directory of another `libtvm_tirx_compiler` to build and
+//! test against that one; `tvm-tirx-config` puts it first.
 //!
 //! The tests are laid out like the modules. Each top-level module is one test binary,
 //! `tests/<module>/main.rs`, and the tests of `src/<path>.rs` are in `tests/<path>.rs`:
 //! `tests/tirx/transform/function_pass.rs` tests `src/tirx/transform/function_pass.rs`. Run the
 //! tests of one module with `--test <module>`, such as `--test tirx`. `tests/common/` holds the
 //! helpers the binaries share.
+
+// The crate reaches `libtvm_tirx_compiler` through the FFI registry, so a linker that drops
+// unreferenced libraries (`--as-needed`) would drop the library the build script links, and its
+// registrations would never run. Each TIRx shared library exports a `<library>_link_anchor`
+// function that does nothing, defined in the `link_anchor.cc` of its sources (for the compiler,
+// `src/ir/link_anchor.cc`) and declared by whoever references it. The static below holds the
+// anchor's address: a relocation against the symbol in the object of this module, which costs
+// nothing at run time and is what makes the linker keep the library.
+//
+// A program pulls in only the objects of the crate it references, so the static keeps the
+// library only when the object of this module is pulled. It is, because the objects of the crate
+// reference one another densely and `sym::analyzer` references `ExitOnDrop::new` below. The test
+// binaries rely on the same mechanism and fail at their first registry lookup if that changes. A
+// program that uses the registry only through `tvm_ffi` itself, without calling a wrapper, must
+// keep the library by other means, such as the linker arguments `tvm-tirx-config --libs compiler`
+// prints.
+extern "C" {
+    fn tvm_tirx_compiler_link_anchor() -> i32;
+}
+
+#[used]
+static TVM_TIRX_COMPILER_LINK_ANCHOR: unsafe extern "C" fn() -> i32 = tvm_tirx_compiler_link_anchor;
 
 /// Makes a scope guard neither `Send` nor `Sync`: the native scopes keep their state per thread,
 /// or in an object that is not synchronized, so a scope must end on the thread that opened it.

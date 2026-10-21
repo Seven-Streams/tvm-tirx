@@ -26,11 +26,8 @@ mod common;
 use tvm_tirx::runtime::{self, MemoryScope};
 use tvm_tirx::tvm_ffi::{DLDataType, DLDataTypeExt, DLDevice, DLDeviceType, Module, TypeIndex};
 
-use common::load_tirx_compiler;
-
 #[test]
 fn tensors() {
-    load_tirx_compiler();
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
     let float32 = DLDataType::try_from_str("float32").unwrap();
     let tensor = runtime::empty(&[2, 8], float32, cpu, None).unwrap();
@@ -44,7 +41,6 @@ fn tensors() {
 
 #[test]
 fn memory_scopes() {
-    load_tirx_compiler();
     let scope = MemoryScope::register("rust_test.scratch").unwrap();
     let again = MemoryScope::register("rust_test.scratch");
     assert!(again.is_err());
@@ -56,14 +52,12 @@ fn memory_scopes() {
 
 #[test]
 fn queries() {
-    load_tirx_compiler();
     assert!(runtime::enabled("cpu").unwrap());
     assert!(runtime::num_threads().unwrap() >= 1);
 }
 
 #[test]
 fn device_attrs() {
-    load_tirx_compiler();
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
     let exist = runtime::get_device_attr(cpu, "exist").unwrap();
     assert!(bool::try_from(exist).unwrap());
@@ -73,7 +67,6 @@ fn device_attrs() {
 
 #[test]
 fn cuda_queries() {
-    load_tirx_compiler();
     // The CUDA queries are in the CUDA runtime library, which the build may have.
     let cuda_runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../build/lib/libtvm_runtime_cuda.so");

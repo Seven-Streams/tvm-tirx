@@ -24,11 +24,10 @@ use tvm_tirx::tirx::IndexMap;
 use tvm_tirx::tvm_ffi::{Array, DLDataType, DLDataTypeExt, DLDevice, DLDeviceType};
 
 use super::{as_i64, int32, op, prim_type, range, var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn index_maps() {
-    load_tirx_compiler();
     let _serial = serial();
     let (i, j) = (var("i", prim_type("int32")), var("j", prim_type("int32")));
     let transpose = IndexMap::new(

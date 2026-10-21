@@ -25,11 +25,10 @@ mod common;
 
 use tvm_tirx::script;
 
-use common::{empty_module, load_tirx_compiler};
+use common::empty_module;
 
 #[test]
 fn print_module() {
-    load_tirx_compiler();
     let text = script::script(&empty_module()).unwrap();
     assert!(text.as_str().contains("class Module"), "{}", text.as_str());
 }

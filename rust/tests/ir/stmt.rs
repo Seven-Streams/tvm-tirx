@@ -23,11 +23,10 @@ use tvm_tirx::ir::*;
 use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
 
 use super::{dtype, int32, int32_var, loc, op, seq, tensor_var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn statements() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = int32_var("x");
     let y = int32_var("y");

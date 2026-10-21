@@ -22,11 +22,10 @@
 use tvm_tirx::tirx::renew_def;
 
 use super::{prim_type, var, void_function};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn functions() {
-    load_tirx_compiler();
     let _serial = serial();
     let x = var("x", prim_type("int32"));
     let func = void_function(vec![x.clone()]);

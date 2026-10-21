@@ -22,11 +22,10 @@
 use tvm_tirx::tirx::{gpu_thread_return, logaddexp, reinterpret};
 
 use super::{loc, prim_type, var};
-use crate::common::{load_tirx_compiler, serial, structural_equal};
+use crate::common::{serial, structural_equal};
 
 #[test]
 fn ops() {
-    load_tirx_compiler();
     let _serial = serial();
     let (a, b) = (var("a", prim_type("float32")), var("b", prim_type("float32")));
     let sum = logaddexp(&a, &b, loc()).unwrap();
