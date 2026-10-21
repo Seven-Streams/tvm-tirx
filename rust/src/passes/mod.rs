@@ -33,6 +33,7 @@ pub mod analyzer;
 pub mod bind_target;
 pub mod common_subexpr_elim;
 pub mod convert_ssa;
+pub mod cuda_exec_analysis;
 pub mod data_type_rewriter;
 pub mod decorate_device_scope;
 pub mod dtype_conversion;
@@ -43,6 +44,7 @@ pub mod function_utils;
 pub mod hoist_if;
 pub mod lower_intrin;
 pub mod lower_tensor_layouts;
+pub mod lower_thread_allreduce;
 pub mod lower_tvm_builtin;
 pub mod make_packed_api;
 pub mod narrow_datatype;
@@ -54,10 +56,12 @@ pub mod split_host_device;
 pub mod stmt_simplify;
 pub mod storage_rewrite;
 pub mod substitute_dtype;
+pub mod tile_dispatch;
 pub mod tvm_ffi_binder;
 pub mod unroll_loop;
 pub mod unsupported_dtype_legalize;
 pub mod util;
+pub mod vectorize_loop;
 pub mod verify_memory;
 
 pub use util::{function_pass, module_pass, native_pass, sequential};
@@ -98,6 +102,7 @@ pub fn factories() -> Vec<(&'static str, FfiFunction)> {
         ("LowerIntrin", nullary(lower_intrin::lower_intrin)),
         ("LowerTensorLayouts", nullary(lower_tensor_layouts::lower_tensor_layouts)),
         ("LowerTVMBuiltin", nullary(lower_tvm_builtin::lower_tvm_builtin)),
+        ("LowerThreadAllreduce", nullary(lower_thread_allreduce::lower_thread_allreduce)),
         ("MakePackedAPI", nullary(make_packed_api::make_packed_api)),
         (
             "NarrowDataType",
@@ -113,7 +118,14 @@ pub fn factories() -> Vec<(&'static str, FfiFunction)> {
         ("SplitHostDevice", nullary(split_host_device::split_host_device)),
         ("StmtSimplify", nullary(stmt_simplify::stmt_simplify)),
         ("StorageRewrite", nullary(storage_rewrite::storage_rewrite)),
+        ("TileDispatch", nullary(tile_dispatch::tile_dispatch)),
         ("UnrollLoop", nullary(unroll_loop::unroll_loop)),
+        (
+            "VectorizeLoop",
+            FfiFunction::from_packed(|args: &[AnyView]| -> Result<Any> {
+                Ok(Any::from(vectorize_loop::vectorize_loop(bool::try_from(args[0])?)?))
+            }),
+        ),
         ("VerifyMemory", nullary(verify_memory::verify_memory)),
     ]
 }

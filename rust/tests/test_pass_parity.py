@@ -141,6 +141,8 @@ CASES = {
         sources=["tirx.InsertHoistedIf", "tirx.StmtSimplify"],
         native=lambda: tvm_tirx.tirx.transform.HoistIf().passes[0],
     ),
+    # The native pass rewrites none of its recorded inputs; see test_lower_thread_allreduce_paths.
+    "LowerThreadAllreduce": dict(sources=["tirx.LowerThreadAllreduce", "tirx.LowerIntrin"]),
     "Filter[host]": dict(factory="Filter", sources=["tirx.Filter"], args=(_is_host_function,)),
     "Filter[device]": dict(
         factory="Filter", sources=["tirx.Filter"], args=(lambda f: not _is_host_function(f),)
@@ -173,6 +175,12 @@ CASES = {
     "FlattenTensor": dict(sources=["tirx.FlattenTensor"]),
     # The pass needs a current target when a function has none; any target gives the same result.
     "LowerTensorLayouts": dict(sources=["tirx.LowerTensorLayouts"], target="cuda"),
+    "VectorizeLoop[on]": dict(
+        factory="VectorizeLoop", sources=["tirx.VectorizeLoop"], args=(True,)
+    ),
+    "VectorizeLoop[off]": dict(
+        factory="VectorizeLoop", sources=["tirx.VectorizeLoop"], args=(False,)
+    ),
     # Few inputs come to RenormalizeSplitPattern itself; the split patterns appear in the inputs of
     # many passes after it.
     "RenormalizeSplitPattern": dict(
@@ -240,6 +248,8 @@ CASES = {
             "tirx.LowerTVMBuiltin",
         ]
     ),
+    # The recorded TileDispatch inputs leave the target to the context, as `tirx.compile` sets it.
+    "TileDispatch": dict(sources=["tirx.TileDispatch"], target="cuda"),
 }
 
 
@@ -533,6 +543,286 @@ def test_common_subexpr_elim_unit_inputs(monkeypatch):
         if name.startswith("test_"):
             getattr(tests, name)()
     assert len(compared) >= 20
+
+
+def _allreduce_targets():
+    return {
+        "cuda": tvm_tirx.target.Target("cuda", host="llvm"),
+        "rocm": tvm_tirx.target.Target("rocm", host="llvm"),
+        "metal": tvm_tirx.target.Target(
+            {"kind": "metal", "max_threads_per_block": 1024, "thread_warp_size": 32, "host": "llvm"}
+        ),
+        "webgpu": tvm_tirx.target.Target(
+            {"kind": "webgpu", "supports_subgroups": True, "host": "llvm"}
+        ),
+        "webgpu1024": tvm_tirx.target.Target(
+            {"kind": "webgpu", "max_num_threads": 1024, "supports_subgroups": True, "host": "llvm"}
+        ),
+        "llvm": tvm_tirx.target.Target("llvm"),
+    }
+
+
+def _allreduce_sum_1d(target, n, dtype="float32"):
+    """A sum over `n` threads, in a loop over 4 rows."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    zero = tvm_tirx.tirx.const(0, dtype)
+
+    @I.ir_module
+    class Module:
+        @T.function(private=True)
+        def main(A: T.Tensor((4, n), dtype), B: T.Tensor((4,), dtype)):
+            T.func_attr({"target": target})
+            A_flat = T.decl_tensor(A.data, ty_args=[T.Tensor(4 * n, dtype, data=A.data)])
+            for i in range(4):
+                threadIdx_x = T.launch_thread("threadIdx.x", n)
+                reduce = T.alloc_tensor(ty_args=[T.Tensor((1,), dtype, scope="local")])
+                T.gpu_thread_allreduce(
+                    T.Lambda([dtype, dtype], lambda x, y: (x + y,)),
+                    (zero,),
+                    (A_flat[i * n + threadIdx_x],),
+                    T.bool(True),
+                    (reduce[0],),
+                    (threadIdx_x,),
+                )
+                if threadIdx_x == 0:
+                    B[i] = reduce[0]
+
+    return Module
+
+
+def _allreduce_predicated(target, n):
+    """A sum whose condition is not constant, so the inputs are selected against the inits."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class Module:
+        @T.function(private=True)
+        def main(A: T.Tensor((n,), "float32"), B: T.Tensor((1,), "float32")):
+            T.func_attr({"target": target})
+            threadIdx_x = T.launch_thread("threadIdx.x", n)
+            reduce = T.alloc_tensor(ty_args=[T.Tensor((1,), "float32", scope="local")])
+            T.gpu_thread_allreduce(
+                T.Lambda([T.float32, T.float32], lambda x, y: (x + y,)),
+                (T.float32(0),),
+                (A[threadIdx_x],),
+                threadIdx_x < n - 3,
+                (reduce[0],),
+                (threadIdx_x,),
+            )
+            if threadIdx_x == 0:
+                B[0] = reduce[0]
+
+    return Module
+
+
+def _allreduce_argmax_2d(target, ny, nx, dtype="float32"):
+    """Two values (a max and its index) reduced over threadIdx.x, in groups along threadIdx.y."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class Module:
+        @T.function(private=True)
+        def main(
+            A: T.Tensor((ny * nx,), dtype), B: T.Tensor((ny,), dtype), C: T.Tensor((ny,), "int32")
+        ):
+            T.func_attr({"target": target})
+            threadIdx_y = T.launch_thread("threadIdx.y", ny)
+            red_v = T.alloc_tensor(ty_args=[T.Tensor((1,), dtype, scope="local")])
+            red_i = T.alloc_tensor(ty_args=[T.Tensor((1,), "int32", scope="local")])
+            threadIdx_x = T.launch_thread("threadIdx.x", nx)
+            T.gpu_thread_allreduce(
+                T.Lambda(
+                    [dtype, "int32", dtype, "int32"],
+                    lambda v0, i0, v1, i1: (T.max(v0, v1), T.Select(v0 >= v1, i0, i1)),
+                ),
+                (T.min_value(ty=dtype), T.int32(-1)),
+                (A[threadIdx_y * nx + threadIdx_x], threadIdx_x),
+                T.bool(True),
+                (red_v[0], red_i[0]),
+                (threadIdx_x,),
+            )
+            if threadIdx_x == 0:
+                B[threadIdx_y] = red_v[0]
+                C[threadIdx_y] = red_i[0]
+
+    return Module
+
+
+def _allreduce_over_y(target, ny, nx):
+    """A sum over threadIdx.y, which is not contiguous in the flattened thread index."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class Module:
+        @T.function(private=True)
+        def main(A: T.Tensor((ny * nx,), "float32"), B: T.Tensor((nx,), "float32")):
+            T.func_attr({"target": target})
+            threadIdx_y = T.launch_thread("threadIdx.y", ny)
+            reduce = T.alloc_tensor(ty_args=[T.Tensor((1,), "float32", scope="local")])
+            threadIdx_x = T.launch_thread("threadIdx.x", nx)
+            T.gpu_thread_allreduce(
+                T.Lambda([T.float32, T.float32], lambda x, y: (x + y,)),
+                (T.float32(0),),
+                (A[threadIdx_y * nx + threadIdx_x],),
+                T.bool(True),
+                (reduce[0],),
+                (threadIdx_y,),
+            )
+            if threadIdx_y == 0:
+                B[threadIdx_x] = reduce[0]
+
+    return Module
+
+
+def _allreduce_over_xy(target, ny, nx):
+    """A sum over both thread axes."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class Module:
+        @T.function(private=True)
+        def main(A: T.Tensor((ny * nx,), "float32"), B: T.Tensor((1,), "float32")):
+            T.func_attr({"target": target})
+            threadIdx_y = T.launch_thread("threadIdx.y", ny)
+            threadIdx_x = T.launch_thread("threadIdx.x", nx)
+            reduce = T.alloc_tensor(ty_args=[T.Tensor((1,), "float32", scope="local")])
+            T.gpu_thread_allreduce(
+                T.Lambda([T.float32, T.float32], lambda x, y: (x + y,)),
+                (T.float32(0),),
+                (A[threadIdx_y * nx + threadIdx_x],),
+                T.bool(True),
+                (reduce[0],),
+                (threadIdx_x, threadIdx_y),
+            )
+            if threadIdx_x == 0:
+                B[0] = reduce[0]
+
+    return Module
+
+
+def _allreduce_aliases(target, alias_after):
+    """The result consumed through a declaration over the destination's data, declared before or
+    after the allreduce."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    if alias_after:
+
+        @I.ir_module
+        class After:
+            @T.function(private=True)
+            def main(A: T.Tensor((4, 128), "float32"), B: T.Tensor((4,), "float32")):
+                T.func_attr({"target": target})
+                threadIdx_y = T.launch_thread("threadIdx.y", 4)
+                cross = T.alloc_tensor(ty_args=[T.Tensor((1,), "float32", scope="local")])
+                threadIdx_x = T.launch_thread("threadIdx.x", 128)
+                A_flat = T.decl_tensor(A.data, ty_args=[T.Tensor((512,), "float32", data=A.data)])
+                T.gpu_thread_allreduce(
+                    T.Lambda([T.float32, T.float32], lambda x0, y0: (x0 + y0,)),
+                    (T.float32(0),),
+                    (A_flat[threadIdx_y * 128 + threadIdx_x],),
+                    T.bool(True),
+                    (cross[0],),
+                    (threadIdx_x,),
+                )
+                cross_alias = T.decl_tensor(
+                    cross.data, ty_args=[T.Tensor((1,), "float32", scope="local")]
+                )
+                cross[0] = cross_alias[0]
+                if threadIdx_x == 0:
+                    B_flat = T.decl_tensor(B.data, ty_args=[T.Tensor((4,), "float32", data=B.data)])
+                    B_flat[threadIdx_y] = cross_alias[0]
+
+        return After
+
+    @I.ir_module
+    class Before:
+        @T.function(private=True)
+        def main(A: T.Tensor((128, 32), "float32"), B: T.Tensor(128, "float32")):
+            T.func_attr({"target": target})
+            A_flat = T.decl_tensor(A.data, ty_args=[T.Tensor(4096, "float32", data=A.data)])
+            for i in range(128):
+                threadIdx_x = T.launch_thread("threadIdx.x", 32)
+                reduce_data = T.alloc_tensor(ty_args=[T.Tensor((1,), "float32", scope="local")])
+                reduce = T.decl_tensor(
+                    reduce_data.data, ty_args=[T.Tensor(1, "float32", scope="local")]
+                )
+                reduce_alias = T.decl_tensor(
+                    reduce.data, ty_args=[T.Tensor(1, "float32", scope="local")]
+                )
+                T.gpu_thread_allreduce(
+                    T.Lambda([T.float32, T.float32], lambda x, y: (x + y,)),
+                    (T.float32(0),),
+                    (A_flat[0],),
+                    T.bool(True),
+                    (reduce_alias[0],),
+                    (threadIdx_x,),
+                )
+                if threadIdx_x == 0:
+                    B[i] = reduce_alias[0]
+
+    return Before
+
+
+def _allreduce_modules():
+    targets = _allreduce_targets()
+    cases = {}
+    # Within a warp, across warps, and through shared memory (an extent that is no multiple of
+    # the warp size, a narrow type, a target without shuffles), and the extent 1 that needs none.
+    for target in ["cuda", "rocm", "metal", "webgpu", "webgpu1024", "llvm"]:
+        for n in [1, 16, 32, 48, 64, 128, 1024]:
+            cases[f"sum_1d[{target},{n}]"] = _allreduce_sum_1d(targets[target], n)
+    for dtype in ["int8", "float16", "int64", "float64", "int32"]:
+        for target in ["cuda", "rocm"]:
+            cases[f"sum_1d[{target},64,{dtype}]"] = _allreduce_sum_1d(targets[target], 64, dtype)
+    for target in ["cuda", "metal", "llvm"]:
+        for n in [32, 128]:
+            cases[f"predicated[{target},{n}]"] = _allreduce_predicated(targets[target], n)
+    for target in ["cuda", "rocm", "webgpu1024", "llvm"]:
+        for ny, nx in [(4, 16), (2, 64), (4, 128), (32, 32), (3, 40)]:
+            cases[f"argmax_2d[{target},{ny}x{nx}]"] = _allreduce_argmax_2d(targets[target], ny, nx)
+            cases[f"over_y[{target},{ny}x{nx}]"] = _allreduce_over_y(targets[target], ny, nx)
+            cases[f"over_xy[{target},{ny}x{nx}]"] = _allreduce_over_xy(targets[target], ny, nx)
+    for target in ["cuda", "webgpu"]:
+        for after in [False, True]:
+            cases[f"aliases[{target},after={after}]"] = _allreduce_aliases(targets[target], after)
+    return cases
+
+
+def test_lower_thread_allreduce_paths():
+    """Inputs the native pass rewrites, as the corpus has none."""
+    native = tvm_tirx.tirx.transform.LowerThreadAllreduce()
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.LowerThreadAllreduce")()
+    changed = both_failed = 0
+    failures = []
+    for name, module in _allreduce_modules().items():
+        outcome = []
+        for pass_ in (native, rust):
+            try:
+                outcome.append(("ok", pass_(module)))
+            except Exception as error:
+                outcome.append(("error", error))
+        (native_kind, expected), (rust_kind, actual) = outcome
+        if native_kind == rust_kind == "error":
+            both_failed += 1
+        elif native_kind != rust_kind:
+            detail = expected if native_kind == "error" else actual
+            failures.append(f"{name}: native {native_kind}, rust {rust_kind}: {detail!s:.300}")
+        else:
+            changed += not tvm_ffi.structural_equal(module, expected, map_free_vars=True)
+            if not tvm_ffi.structural_equal(expected, actual, map_free_vars=True):
+                mismatch = tvm_ffi.get_first_structural_mismatch(
+                    expected, actual, map_free_vars=True
+                )
+                failures.append(f"{name}: results differ at {mismatch}")
+    print(f"LowerThreadAllreduce paths: {changed} changed, {both_failed} failed on both sides")
+    assert not failures, "\n".join(failures[:20])
 
 
 def _lower_tvm_builtin_modules():
@@ -1507,6 +1797,304 @@ def test_lower_tensor_layouts_requires_a_target():
             pass_(tvm_tirx.IRModule({"main": main}))
 
 
+def _vectorize_loop_functions():
+    """VectorizeLoop rewrites the corpus misses: every widened operator, scalar operands that
+    change (always-rebuilt calls), scalarized statements, merged and concatenated ramps, `Let`,
+    `Shuffle`, nested and serial loops, branches, unroll policies, RVV, tensor-level predication,
+    OpenCL texture accesses, and the checks that reject a loop."""
+    from tvm_tirx.script import tirx as T
+
+    x86 = tvm_tirx.target.Target({"kind": "llvm", "mtriple": "x86_64-linux-gnu"})
+    rvv = tvm_tirx.target.Target(
+        {"kind": "llvm", "mtriple": "riscv64-unknown-linux-gnu", "mattr": ["+v"]}
+    )
+    sve = tvm_tirx.target.Target(
+        {"kind": "llvm", "mtriple": "aarch64-linux-gnu", "mattr": ["+v8.2a", "+sve"]}
+    )
+
+    @T.function
+    def arith(
+        A: T.Tensor((64,), "float32"),
+        B: T.Tensor((64,), "int32"),
+        C: T.Tensor((64, 64), "int32"),
+        n: T.int32,
+    ):
+        for i in T.vectorized(4):
+            B[i] = T.truncdiv(i, 2) + T.truncmod(i, 3) + i // 2 + i % 3 + T.min(i, n) + T.max(i, 1)
+            B[i + 4] = T.shift_left(i, 1) | (i & 3) ^ T.shift_right(T.bitwise_not(i), 1)
+            B[i + 8] = T.Select(T.And(i < n, T.Or(i > 1, i == n)), i, n)
+            B[i + 12] = (
+                T.Cast("int32", T.Not(i != n)) + T.Cast("int32", i <= n) + T.Cast("int32", i >= n)
+            )
+            B[i * 3 + 16] = B[3 * i] + B[i * n] + B[n * i] + B[i * 0] + B[i * -1 + 8]
+            B[i + 32] = n * 2 + i - n - (n - i)
+            A[i] = T.reinterpret(B[i], ty="float32") + T.exp(A[i]) + T.Cast("float32", B[i])
+            B[i + 36] = T.call_extern("g", n, ty="int32") * n + i
+            B[i + 40] = T.call_extern("g", n, ty="int32") + n + i
+            B[i + 44] = T.truncdiv(T.call_extern("g", n, ty="int32"), n) + i
+            B[T.Ramp(T.call_extern("g", n, ty="int32"), 1, 4)] = T.Broadcast(i, 4)
+            C[i, n] = n
+            C[n, i] = n
+            C[i, i] = n
+
+    @T.function
+    def scalarize(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "int32"), n: T.int32):
+        for i in T.vectorized(4):
+            A[i] = T.call_extern("f", A[i], ty="float32")
+            T.evaluate(T.call_extern("g", n, ty="int32"))
+            A[T.Ramp(i * 4, 1, 4)] = T.Broadcast(A[i], 4)
+            A[T.Ramp(32, 1, 4)] = T.Broadcast(A[0], 4)
+            v: T.let = T.call_extern("f", A[i], ty="float32")
+            A[i + 16] = v
+            w: T.let = n * 2
+            B[i] = w + i
+            u: T.let = n + 1
+            B[u] = n
+
+    @T.function
+    def ramps(A: T.Tensor((128,), "float32"), n: T.int32):
+        for i in T.vectorized(4):
+            A[T.Ramp(i * 4, 1, 4)] = T.Broadcast(T.float32(1), 4)
+            A[T.Ramp(i * 8, 1, 4)] = T.Broadcast(T.float32(2), 4)
+            A[T.Ramp(64, i, 2)] = T.Broadcast(T.float32(3), 2)
+            A[T.Ramp(i, n, 2)] = T.Broadcast(T.float32(4), 2)
+
+    @T.function
+    def lets(B: T.Tensor((64,), "int32"), n: T.int32):
+        for i in T.vectorized(4):
+            x = T.int32()
+            y = T.int32()
+            B[i] = T.Let(x * 2 + x, where={x: i + n})
+            B[i + 4] = T.Let(y + i, where={y: n * 3})
+
+    @T.function(check_well_formed=False)
+    def lets_rebound(B: T.Tensor((64,), "int32"), n: T.int32):
+        for i in T.vectorized(4):
+            y = T.int32()
+            B[i + 4] = T.Let(y + i, where={y: n * 3})
+            B[i + 8] = T.Let(y + 1, where={y: n * 3})
+
+    @T.function
+    def loops(A: T.Tensor((256,), "float32"), n: T.int32):
+        for i in T.vectorized(4):
+            for j in range(n):
+                A[i * 16 + j] = A[j] + T.float32(1)
+            for k in range(i):
+                A[i + k] = T.float32(2)
+            for k2 in range(n):
+                A[k2] = T.float32(3)
+        for i2 in T.vectorized(4):
+            for j2 in T.vectorized(4):
+                A[i2 * 4 + j2] = T.float32(4)
+        for i3 in T.vectorized(4):
+            A[n] = T.float32(5)
+
+    @T.function
+    def branches(A: T.Tensor((64,), "float32"), n: T.int32):
+        for i in T.vectorized(4):
+            if n > 2:
+                A[i] = T.float32(1)
+            if i < 2:
+                A[i] = T.float32(2)
+            else:
+                A[i] = T.float32(3)
+            if T.call_extern("p", i, ty="bool"):
+                A[i + 4] = T.float32(4)
+            if n > 3:
+                A[n] = T.float32(5)
+            else:
+                A[i] = T.float32(6)
+
+    @T.function
+    def unroll_policy(A: T.Tensor((256,), "float32")):
+        for i in T.vectorized(
+            4, annotations={"tirx.auto_unroll_max_step": 16, "tirx.unroll_explicit": 1}
+        ):
+            for j in range(4):
+                for j2 in range(4):
+                    A[i * 64 + j * 4 + j2] = T.float32(1)
+            for k in T.serial(4, annotations={"tirx.auto_unroll_max_step": 8}):
+                A[i * 64 + k + 32] = T.float32(2)
+            A[i] = T.float32(3)
+        for i2 in T.vectorized(4, annotations={"tirx.unroll_explicit": 0, "pragma_other": 2}):
+            for j3 in range(4):
+                A[i2 * 4 + j3] = T.float32(1)
+
+    @T.function
+    def shuffles(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        for i in T.vectorized(4):
+            B[i] = T.Shuffle([A[T.Ramp(0, 1, 4)]], [i])
+            B[i + 8] = T.Shuffle([A[T.Ramp(i * 0, 1, 4)]], [i])
+            v: T.let = T.Shuffle([A[T.Ramp(i * 0 + 8, 1, 2)]], [i % 2])
+            B[0] = v
+
+    @T.function
+    def shuffle_lanes(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        for i in T.vectorized(4):
+            B[i] = T.Shuffle([A[T.Ramp(i * 0 + 8, 1, 2)]], [i % 2])
+
+    @T.function
+    def shuffle_vectors(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        for i in T.vectorized(4):
+            B[i] = T.Shuffle([A[T.Ramp(0, 1, 2)], A[T.Ramp(2, 1, 2)]], [0])
+
+    @T.function
+    def shuffle_index(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        for i in T.vectorized(4):
+            B[i] = T.Shuffle([A[T.Ramp(0, 1, 4)]], [i + 1])
+
+    @T.function
+    def targets(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        T.func_attr({"target": rvv})
+        for i in T.vectorized(14, annotations={"tirx.unroll_explicit": 1}):
+            B[i] = A[i] + T.float32(1)
+        for j in T.vectorized(8):
+            B[j] = T.exp(A[j])
+        for k in T.vectorized(T.int64(10)):
+            A[k] = T.float32(1)
+
+    @T.function
+    def cuda(A: T.Tensor((64,), "float32x2")):
+        T.func_attr({"target": T.target("cuda")})
+        for i in T.vectorized(4):
+            A[i] = T.Broadcast(T.float32(1), 2)
+
+    @T.function
+    def sve_ops(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "int32"), n: T.int32):
+        T.func_attr({"target": sve})
+        for i in T.vectorized(4 * T.vscale()):
+            B[i] = i * 2 + n
+            A[i] = T.Select(i < n, A[i], T.float32(0))
+            B[i + 1] = T.if_then_else(n > 0, B[i], 0)
+
+    @T.function
+    def predicated(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32"), n: T.int32):
+        for i in T.vectorized(4):
+            if i < n:
+                B[i] = A[i] + T.float32(1)
+        for j in T.vectorized(4):
+            if j < 7:
+                B[j + 8] = A[j]
+        for k in T.vectorized(4):
+            if k < n:
+                B[k] = T.float32(2)
+                B[k * 2] = T.float32(3)
+        for m in T.vectorized(4):
+            if m < n:
+                T.evaluate(0)
+        for q in T.vectorized(4):
+            if q + n < 9:
+                B[q + n] = A[q + n]
+
+    @T.function
+    def predicated_rvv(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        T.func_attr({"target": rvv})
+        for i in range(4):
+            for j in T.vectorized(4):
+                if i * 4 + j < 14:
+                    B[i * 4 + j] = A[i * 4 + j] + T.float32(1)
+
+    @T.function
+    def nonzero_min(A: T.Tensor((64,), "float32")):
+        for i in T.vectorized(1, 5):
+            A[i] = T.float32(1)
+
+    @T.function
+    def dynamic_extent(A: T.Tensor((64,), "float32"), n: T.int32):
+        for i in T.vectorized(n):
+            A[i] = T.float32(1)
+
+    @T.function
+    def dynamic_extent_x86(A: T.Tensor((64,), "float32"), n: T.int32):
+        T.func_attr({"target": x86})
+        for i in T.vectorized(n):
+            A[i] = T.float32(1)
+
+    @T.function
+    def unit_extent(A: T.Tensor((64,), "float32")):
+        for i in T.vectorized(1):
+            A[i] = T.float32(1)
+
+    def texture(load_bits, store_bits):
+        @T.function
+        def main(
+            a: T.handle("float32", "global.texture"), c: T.handle("float32", "global.texture")
+        ):
+            tx = T.launch_thread("threadIdx.x", 128)
+            for e in T.vectorized(4):
+                load = T.call_intrin(
+                    "tirx.opencl.texture2d_load", a, tx, 0, 0, load_bits, e, ty="float32"
+                )
+                T.evaluate(
+                    T.call_intrin(
+                        "tirx.opencl.texture2d_store",
+                        c,
+                        tx,
+                        0,
+                        0,
+                        store_bits,
+                        load + T.float32(1),
+                        ty="int32",
+                    )
+                )
+
+        return main
+
+    predicate = {"tirx.enable_tensor_level_predication": True}
+    return {
+        "texture": (texture(128, 128), {}),
+        "texture_load_bits": (texture(64, 128), {}),
+        "texture_store_bits": (texture(128, 64), {}),
+        "arith": (arith, {}),
+        "scalarize": (scalarize, {}),
+        "ramps": (ramps, {}),
+        "lets": (lets, {}),
+        "lets_rebound": (lets_rebound, {}),
+        "loops": (loops, {}),
+        "branches": (branches, {}),
+        "unroll_policy": (unroll_policy, {}),
+        "shuffles": (shuffles, {}),
+        "shuffle_lanes": (shuffle_lanes, {}),
+        "shuffle_vectors": (shuffle_vectors, {}),
+        "shuffle_index": (shuffle_index, {}),
+        "targets": (targets, {}),
+        "cuda": (cuda, {}),
+        "sve_ops": (sve_ops, {}),
+        "predicated": (predicated, predicate),
+        "predicated_unset": (predicated, {}),
+        "predicated_int": (predicated, {"tirx.enable_tensor_level_predication": 1}),
+        "predicated_rvv": (predicated_rvv, predicate),
+        "nonzero_min": (nonzero_min, {}),
+        "dynamic_extent": (dynamic_extent, {}),
+        "dynamic_extent_x86": (dynamic_extent_x86, {}),
+        "unit_extent": (unit_extent, {}),
+    }
+
+
+def _run_vectorize_loop(factory, enable, func, config):
+    try:
+        with tvm_tirx.transform.PassContext(config=config):
+            return "ok", factory(enable)(tvm_tirx.IRModule({"main": func}))
+    except Exception as error:
+        return type(error).__name__, str(error).strip().splitlines()[-1]
+
+
+def test_vectorize_loop_branches():
+    native = tvm_ffi.get_global_func("tirx.transform.VectorizeLoop")
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.VectorizeLoop")
+    failures = []
+    for name, (func, config) in _vectorize_loop_functions().items():
+        for enable in (True, False):
+            expected = _run_vectorize_loop(native, enable, func, config)
+            actual = _run_vectorize_loop(rust, enable, func, config)
+            if expected[0] != "ok" or actual[0] != "ok":
+                if expected != actual:
+                    failures.append(f"{name}[{enable}]: native {expected}, rust {actual}")
+            elif not tvm_ffi.structural_equal(expected[1], actual[1], map_free_vars=True):
+                failures.append(f"{name}[{enable}]: results differ")
+    assert not failures, "\n".join(failures)
+
+
 def _renormalize_split_pattern_module():
     """Every RenormalizeSplitPattern rule, matching and not: floordiv of floormod (scalar and
     broadcast, divisible or not), unsigned types, the factoring rules with two and three terms
@@ -2145,3 +2733,121 @@ def test_upstream_suite_parity(monkeypatch, factory, test_name):
     for kwargs in _parametrizations(test):
         test(**kwargs)
     assert runs, f"{test_name} never ran {factory}"
+
+
+def _tile_callbacks_module():
+    """A tile instruction whose dispatcher uses every callback of its context: a private
+    allocation, a device and a host init statement, and a statement after the definition of the
+    view it writes. The view is a `decl_tensor` over a parameter, so the host statement's
+    `tensor_data_ptr` of the view moves onto the parameter."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+    from tvm_tirx.tirx.tile.instruction import Instruction, Operand
+
+    name = "__rust_parity_callbacks__"
+
+    @T.function(private=True)
+    def implementation():
+        T.evaluate(0)
+
+    def lower(view, sctx):
+        tensor = view.call.args[0].source
+        sctx.add_alloc_tensor(T.Var("scratch", T.Tensor((4,), "float32", scope="local")))
+
+        @T.function(check_well_formed=False)
+        def device_init():
+            T.evaluate(T.int32(11))
+            T.kernel_replace_point()
+
+        @T.function(check_well_formed=False)
+        def host_init():
+            T.evaluate(tensor.data)
+            T.kernel_replace_point()
+
+        @T.function(check_well_formed=False)
+        def after_definition():
+            T.evaluate(tensor.data)
+            T.kernel_replace_point()
+
+        sctx.add_init_stmt(device_init.body)
+        sctx.add_init_stmt(host_init.body, host=True)
+        sctx.add_post_tensor_def_stmt(tensor, after_definition.body)
+        return implementation.body
+
+    spec = Instruction(
+        "tirx.cuda.tile." + name,
+        "copy",
+        (Operand("dst", "region"), Operand("src", "region")),
+        scopes=("cluster", "cta", "warpgroup", "warp", "thread"),
+        lower=lower,
+    )
+    setattr(T.cuda.tile, name, spec.register())
+
+    @I.ir_module
+    class Module:
+        @T.function
+        def main(A: T.Tensor((64,), "float32", layout="default")):
+            T.func_attr({"global_symbol": "main"})
+            T.device_entry(launch=T.cuda.LaunchConfig(grid=(2,), block=(128,)))
+            B = T.decl_tensor(
+                A.data, ty_args=[T.Tensor((64,), "float32", layout=None, data=A.data)]
+            )
+            if T.cuda.warp_id() == 0:
+                getattr(T.cuda.tile, name)(B[0:1], B[1:2])
+
+    return Module
+
+
+@pytest.mark.parametrize("factory", ["TileDispatch"])
+def test_tile_dispatch_callbacks(factory):
+    module = _tile_callbacks_module()
+    with tvm_tirx.target.Target("cuda"):
+        native = tvm_ffi.get_global_func(f"tirx.transform.{factory}")()(module)
+        rust = tvm_ffi.get_global_func(f"rust.tirx.transform.{factory}")()(module)
+    assert not tvm_ffi.structural_equal(native, module, map_free_vars=True)
+    assert tvm_ffi.structural_equal(native, rust, map_free_vars=True)
+
+
+def _nested_launch_module():
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class Module:
+        @T.function
+        def main(A: T.Tensor((64,), "float32", layout="default")):
+            T.func_attr({"global_symbol": "main"})
+            T.device_entry(launch=T.cuda.LaunchConfig(grid=(2,), block=(128,)))
+            with T.device_entry(launch=T.cuda.LaunchConfig(grid=(2,), block=(128,))):
+                A[0] = T.float32(1)
+
+    return Module
+
+
+def test_tile_dispatch_errors():
+    """A nested CUDA launch, and a function without a target outside a target context."""
+    for factory in ("tirx.transform.TileDispatch", "rust.tirx.transform.TileDispatch"):
+        with tvm_tirx.target.Target("cuda"):
+            with pytest.raises(ValueError, match="Nested CUDA device_entry"):
+                tvm_ffi.get_global_func(factory)()(_nested_launch_module())
+        with pytest.raises(Exception, match="Target context required"):
+            tvm_ffi.get_global_func(factory)()(_nested_launch_module())
+
+
+@pytest.mark.parametrize("suite", ["test_tile_dispatch.py", "test_lower_tensor_layouts.py"])
+def test_upstream_tile_lowering_suite(suite):
+    """`tests/python/tirx/transform/<suite>` with `TileDispatch` and `LowerTensorLayouts` routed
+    to Rust (`rust_tile_plugin.py`). The dispatch probes also check the thread scope context each
+    dispatcher receives."""
+    import subprocess
+    import sys
+
+    suite = HERE.parent.parent / "tests/python/tirx/transform" / suite
+    if not suite.exists():
+        pytest.skip(f"{suite} not found")
+    path = os.pathsep.join([str(HERE), os.environ.get("PYTHONPATH", "")])
+    env = dict(os.environ, PYTHONPATH=path, TVM_RUST_PASSES=str(LIBRARY), TVM_RUST_TILE_MODE="rust")
+    command = [sys.executable, "-m", "pytest", str(suite), "-q", "-p", "no:cacheprovider"]
+    command += ["-p", "rust_tile_plugin"]
+    result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
