@@ -25,8 +25,11 @@ config, and requires structurally equal results or a failure on both sides.
 Environment: ``TVM_RUST_PASSES`` (the built library), ``TVM_PASS_CORPUS`` (the corpus).
 """
 
+import ast
 import contextlib
 import ctypes
+import importlib.util
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -44,6 +47,35 @@ LIBRARY = Path(
 
 _LIB = ctypes.CDLL(str(LIBRARY))
 assert _LIB.tvm_rust_register_passes() == 0, "registering the Rust passes failed"
+
+
+REPO = HERE.parent.parent
+
+# Upstream test suites run again with the C++ pass replaced by a run of both passes
+# (`test_upstream_suite_parity`), by the factory they exercise.
+SUITES = {
+    "StorageRewrite": "tests/python/tirx/transform/test_storage_rewrite.py",
+    "PointerValueTypeRewrite": ("tests/python/tirx/transform/test_pointer_value_type_rewrite.py"),
+}
+_SUITE_MODULES = {}
+
+
+def _suite(factory):
+    """The upstream test module of `factory`, imported once."""
+    if factory not in _SUITE_MODULES:
+        path = REPO / SUITES[factory]
+        spec = importlib.util.spec_from_file_location(f"_parity_suite_{path.stem}", path)
+        module = importlib.util.module_from_spec(spec)
+        # TVMScript finds the source of a parsed class through `sys.modules`.
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _SUITE_MODULES[factory] = module
+    return _SUITE_MODULES[factory]
+
+
+# Importing the StorageRewrite suite registers the memory scopes `local.L0A` and `local.L0A2`
+# (single allocation), which part of the recorded StorageRewrite corpus uses.
+_suite("StorageRewrite")
 
 
 def _is_host_function(func):
@@ -103,6 +135,7 @@ CASES = {
             "tirx.SplitHostDevice",
         ]
     ),
+    "LowerTVMBuiltin": dict(sources=["tirx.LowerTVMBuiltin", "tirx.MakePackedAPI"]),
     # InsertHoistedIf has no factory of its own; it is the first pass of the native HoistIf.
     "InsertHoistedIf": dict(
         sources=["tirx.InsertHoistedIf", "tirx.StmtSimplify"],
@@ -133,6 +166,13 @@ CASES = {
     "FP8StorageLegalize": dict(
         sources=["tirx.FP8StorageLegalize", "tirx.FP8ComputeLegalize", "tirx.BF16StorageLegalize"]
     ),
+    "MakePackedAPI": dict(sources=["tirx.MakePackedAPI"]),
+    "SplitHostDevice": dict(
+        sources=["tirx.SplitHostDevice", "tirx.BindTarget", "tirx.AnnotateEntryFunc", "tirx.Filter"]
+    ),
+    "FlattenTensor": dict(sources=["tirx.FlattenTensor"]),
+    # The pass needs a current target when a function has none; any target gives the same result.
+    "LowerTensorLayouts": dict(sources=["tirx.LowerTensorLayouts"], target="cuda"),
     # Few inputs come to RenormalizeSplitPattern itself; the split patterns appear in the inputs of
     # many passes after it.
     "RenormalizeSplitPattern": dict(
@@ -179,6 +219,25 @@ CASES = {
             "tirx.LowerTensorLayouts",
             "tirx.MakePackedAPI",
             "tirx.VectorizeLoop",
+        ]
+    ),
+    # StorageRewrite runs after VectorizeLoop; the passes after it see its results.
+    "StorageRewrite": dict(
+        sources=[
+            "tirx.StorageRewrite",
+            "tirx.VectorizeLoop",
+            "tirx.HoistIf",
+            "tirx.UnrollLoop",
+            "tirx.FlattenTensor",
+        ]
+    ),
+    "PointerValueTypeRewrite": dict(
+        sources=[
+            "tirx.PointerValueTypeRewrite",
+            "tirx.StorageRewrite",
+            "tirx.HoistIf",
+            "tirx.UnrollLoop",
+            "tirx.LowerTVMBuiltin",
         ]
     ),
 }
@@ -476,6 +535,103 @@ def test_common_subexpr_elim_unit_inputs(monkeypatch):
     assert len(compared) >= 20
 
 
+def _lower_tvm_builtin_modules():
+    """LowerTVMBuiltin branches the corpus barely reaches: packed calls with every argument kind
+    (int, float, string, handle, bool, tensor, a nested packed call), `call_cpacked`, shape stacks
+    with and without extents, a parallel loop with its own stacks, a device allocation freed per
+    branch and at the end of the device region, the disable annotation, CPU stack and workspace
+    allocations, and an OpenCL image allocation."""
+    from tvm_tirx.script import tirx as T
+
+    float_ptr = tvm_tirx.ir.PtrType(tvm_tirx.ir.PrimType("float32"))
+    image = tvm_tirx.ir.Call(
+        "tirx.opencl.nd_mem_alloc_with_scope",
+        [tvm_tirx.ir.StringImm("global.texture"), 2, tvm_tirx.tirx.const(16, "int64")],
+        ty=float_ptr,
+    )
+
+    @T.function
+    def gpu(A: T.Tensor((16,), "float32"), n: T.int32, x: T.float32, h: T.handle, flag: T.bool):
+        T.func_attr(
+            {
+                "target": T.target("cuda", host="llvm"),
+                "global_symbol": "gpu",
+                "tirx.is_host_func": True,
+            }
+        )
+        with T.device_context(2, 0):
+            T.evaluate(T.call_packed("f", n, x, "text", h, flag, A, T.call_packed("g", n)))
+            T.evaluate(T.call_cpacked("c", n, T.int64(3)))
+            T.evaluate(T.call_packed("s", T.stack_make_shape(n, 4), T.stack_make_shape()))
+            for i in T.parallel(4):
+                T.evaluate(T.call_packed("p", i, A))
+            if n > 0:
+                B = T.alloc_tensor(ty_args=[T.Tensor((n,), "float32")])
+                T.evaluate(T.call_packed("b", B.data))
+            else:
+                C = T.alloc_tensor(ty_args=[T.Tensor((4,), "float32")])
+                T.evaluate(T.call_packed("c", C.data))
+            D = T.alloc_tensor(
+                annotations={"disable_lower_builtin": 1}, ty_args=[T.Tensor((8,), "float32")]
+            )
+            E = T.alloc_tensor(ty_args=[T.Tensor((8,), "float32")])
+            T.evaluate(T.call_packed("e", D.data, E.data))
+
+    @T.function
+    def cpu(n: T.int32):
+        T.func_attr({"target": T.target("llvm"), "global_symbol": "cpu"})
+        with T.device_context(1, 0):
+            small = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32")])
+            large = T.alloc_tensor(ty_args=[T.Tensor((1024,), "float32")])
+            dynamic = T.alloc_tensor(ty_args=[T.Tensor((n,), "float32")])
+            T.evaluate(T.call_packed("f", small.data, large.data, dynamic.data))
+
+    @T.function
+    def opencl(n: T.int32):
+        T.func_attr(
+            {
+                "target": T.target("opencl", host="llvm"),
+                "global_symbol": "opencl",
+                "tirx.is_host_func": True,
+            }
+        )
+        with T.device_context(4, 0):
+            p: T.let = image
+            T.evaluate(T.call_packed("use", p))
+
+    @T.function
+    def no_device(n: T.int32):
+        T.func_attr({"target": T.target("cuda", host="llvm"), "tirx.is_host_func": True})
+        B = T.alloc_tensor(ty_args=[T.Tensor((n,), "float32")])
+        T.evaluate(T.call_packed("b", B.data))
+
+    return {
+        name: (lambda func=func: tvm_tirx.IRModule({name: func}))
+        for name, func in [("gpu", gpu), ("cpu", cpu), ("opencl", opencl), ("no_device", no_device)]
+    }
+
+
+def test_lower_tvm_builtin_branches():
+    native_pass = tvm_tirx.tirx.transform.LowerTVMBuiltin()
+    rust_pass = tvm_ffi.get_global_func("rust.tirx.transform.LowerTVMBuiltin")()
+    for name, module in _lower_tvm_builtin_modules().items():
+        if name == "no_device":
+            # A device allocation outside a device region has no device id: both reject it.
+            with pytest.raises(Exception) as native_error:
+                native_pass(module())
+            with pytest.raises(Exception) as rust_error:
+                rust_pass(module())
+            assert type(native_error.value) is type(rust_error.value), name
+            continue
+        native = native_pass(module())
+        rust = rust_pass(module())
+        assert not tvm_ffi.structural_equal(native, module(), map_free_vars=True), name
+        assert tvm_ffi.structural_equal(native, rust, map_free_vars=True), (
+            name,
+            tvm_ffi.get_first_structural_mismatch(native, rust, map_free_vars=True),
+        )
+
+
 _DTYPE_LEGALIZE_PASSES = [
     "BF16ComputeLegalize",
     "BF16StorageLegalize",
@@ -637,6 +793,718 @@ def test_dtype_legalize_branches(dtype, compute, compute_args, storage, target):
     after_compute = _comparing_factory(compute, compared)(*compute_args)(module)
     _comparing_factory(storage, compared)()(after_compute)
     assert compared == [compute, storage]
+
+
+def _make_packed_api_modules():
+    """MakePackedAPI inputs beyond the corpus: every scalar parameter and return kind, symbolic
+    shapes bound twice or only through later parameters, explicit strides, element offsets, sub-byte
+    and vector dtypes, CUDA/Vulkan/OpenCL devices, subroutine calls, and the skipped functions."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    n = T.dynamic("n", "int64")
+    m = T.dynamic("m", "int32")
+    s = T.dynamic("s", "int32")
+    off = T.dynamic("off", "int32")
+
+    @I.ir_module
+    class Scalars:
+        @T.function
+        def ret_int(a: T.int32, u: T.uint8) -> T.int32:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            if a > 0:
+                return a
+            return T.int32(u)
+
+        @T.function
+        def ret_bool(b: T.bool) -> T.bool:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            return b
+
+        @T.function
+        def ret_float(x: T.float32, h: T.bfloat16, d: T.float64) -> T.float32:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            return x
+
+        @T.function
+        def ret_ptr(p: T.handle) -> T.handle:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            return p
+
+        @T.function
+        def typed_ptr(p: T.handle("float32"), q: T.handle("int8")):
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            T.evaluate(p)
+
+        @T.function
+        def zero_args() -> T.int64:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            for i in T.parallel(1):
+                T.evaluate(i)
+            return T.int64(42)
+
+    @I.ir_module
+    class Symbolic:
+        @T.function
+        def main(
+            A: T.Tensor((n + 1,), "int32"),
+            B: T.Tensor((n,), "int32"),
+            C: T.Tensor((m, 4), "float32", layout=T.TileLayout(T.S[(m, 4) : (s, 1)])),
+            D: T.Tensor((m * 2,), "float16", layout=T.TileLayout(T.S[(m * 2,)] + off)),
+            E: T.Tensor((8,), "int4"),
+            F: T.Tensor((4,), "float32", align=1),
+            k: T.int64,
+        ):
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            for i in range(n):
+                B[i] = A[i] + A[i + 1]
+
+    @I.ir_module
+    class Tensors:
+        @T.function
+        def main(
+            A: T.Tensor((8,), "int1"),
+            B: T.Tensor((8,), "uint4"),
+            C: T.Tensor((), "float32"),
+            D: T.Tensor((4,), "float32", layout=T.TileLayout(T.S[(4,)] + 4)),
+            E: T.Tensor((4,), "bool"),
+            F: T.Tensor((4,), "float32x4"),
+            G: T.Tensor((off,), "float16", layout=T.TileLayout(T.S[(off,)] + off * 2)),
+            k: T.int64,
+            h: T.float16,
+        ):
+            T.func_attr({"target": T.target("opencl", host="llvm"), "calling_conv": 0})
+            T.evaluate(0)
+
+    @I.ir_module
+    class Cuda:
+        @T.function
+        def main(A: T.Tensor((m,), "float32"), B: T.Tensor((m,), "float32")):
+            T.func_attr({"target": T.target("cuda", host="llvm")})
+            T.evaluate(0)
+
+    @I.ir_module
+    class Vulkan:
+        @T.function
+        def main(A: T.Tensor((m,), "float32"), B: T.Tensor((16,), "float32")):
+            T.func_attr({"target": T.target("vulkan", host="llvm")})
+            T.evaluate(0)
+
+    @I.ir_module
+    class Calls:
+        @T.function
+        def main(A: T.handle("float32")):
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            Calls.subroutine(A)
+            Calls.internal(A)
+
+        @T.function
+        def subroutine(A_data: T.handle("float32")):
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            T.evaluate(A_data)
+
+        @T.function(private=True)
+        def internal(A_data: T.handle("float32")):
+            T.func_attr({"target": T.target("llvm")})
+            T.evaluate(A_data)
+
+        @T.function
+        def lowered(A_data: T.handle("float32")):
+            T.func_attr({"target": T.target("llvm", host="llvm"), "calling_conv": 2})
+            T.evaluate(A_data)
+
+        @T.function
+        def no_host(A_data: T.handle("float32")):
+            T.func_attr({"target": T.target("llvm")})
+            T.evaluate(A_data)
+
+    x = tvm_tirx.tirx.Var("x", "int32")
+    void_return = tvm_tirx.tirx.Function(
+        [x], tvm_tirx.ir.Return(tvm_tirx.tirx.call_extern("f", x, ty="void"))
+    )
+    void_return = void_return.with_attr(
+        {"target": tvm_tirx.target.Target("llvm", host="llvm"), "global_symbol": "void_return"}
+    )
+    return [
+        Scalars,
+        Symbolic,
+        Tensors,
+        Cuda,
+        Vulkan,
+        Calls,
+        tvm_tirx.IRModule({"main": void_return}),
+    ]
+
+
+def test_make_packed_api_branches():
+    native = tvm_tirx.tirx.transform.MakePackedAPI()
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.MakePackedAPI")()
+    for before, expected, actual in zip(
+        _make_packed_api_modules(),
+        map(native, _make_packed_api_modules()),
+        map(rust, _make_packed_api_modules()),
+    ):
+        assert not tvm_ffi.structural_equal(before, expected, map_free_vars=True)
+        assert tvm_ffi.structural_equal(expected, actual, map_free_vars=True)
+
+
+def _make_packed_api_rejected():
+    """MakePackedAPI inputs both sides reject, with the message each must carry."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    @I.ir_module
+    class NoTarget:
+        @T.function
+        def main(A: T.handle("float32")):
+            T.evaluate(A)
+
+    @I.ir_module
+    class ParallelReturn:
+        @T.function
+        def main() -> T.int32:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            for i in T.parallel(2):
+                return i
+
+    @I.ir_module
+    class Bfloat16Return:
+        @T.function
+        def main(x: T.bfloat16) -> T.bfloat16:
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            return x
+
+    @I.ir_module
+    class Float8Param:
+        @T.function
+        def main(x: T.float8_e4m3fn):
+            T.func_attr({"target": T.target("llvm", host="llvm")})
+            T.evaluate(x)
+
+    x, y = tvm_tirx.tirx.Var("x", "int32"), tvm_tirx.tirx.Var("y", "int32")
+    undefined = tvm_tirx.tirx.Function([x], tvm_tirx.ir.Evaluate(x + y)).with_attr(
+        {"target": tvm_tirx.target.Target("llvm", host="llvm"), "global_symbol": "main"}
+    )
+    return [
+        (NoTarget, "required the function to be annotated with tvm::attr::kTarget"),
+        (ParallelReturn, "Return cannot be used in parallel scope"),
+        (Bfloat16Return, "data type bfloat16 not supported yet"),
+        (Float8Param, "kDLFloat, DLDataTypeCode::kDLBfloat"),
+        (tvm_tirx.IRModule({"main": undefined}), r"variables \(y,\) are used, but are not passed"),
+    ]
+
+
+def test_make_packed_api_rejects():
+    for factory in ("tirx.transform.MakePackedAPI", "rust.tirx.transform.MakePackedAPI"):
+        pass_ = tvm_ffi.get_global_func(factory)()
+        for mod, message in _make_packed_api_rejected():
+            with pytest.raises(RuntimeError, match=message):
+                pass_(mod)
+
+
+def _compare_on(native, rust, mod, compared):
+    """Run both passes on separate copies of `mod`: the native one may update its input."""
+    text = tvm_tirx.ir.save_json(mod)
+    outcome = []
+    for pass_ in (native, rust):
+        try:
+            outcome.append(("ok", pass_(tvm_tirx.ir.load_json(text))))
+        except Exception as error:  # pylint: disable=broad-except
+            outcome.append(("error", error))
+    (native_kind, expected), (rust_kind, actual) = outcome
+    if native_kind == rust_kind == "error":
+        agree = type(expected) is type(actual)
+    elif native_kind != rust_kind:
+        agree = False
+    else:
+        agree = tvm_ffi.structural_equal(expected, actual, map_free_vars=True)
+    compared.append((agree, native_kind, mod, expected, actual))
+    return native_kind, expected
+
+
+def _pipeline_comparing_factory(name, compared, stop=False):
+    """A stand-in for `tvm_tirx.tirx.transform.<name>` that runs the native pass and the Rust one on
+    each input and continues with the native result, or stops the pipeline after comparing."""
+    native_factory = getattr(tvm_tirx.tirx.transform, name)
+    rust_factory = tvm_ffi.get_global_func(f"rust.tirx.transform.{name}")
+
+    def factory(*args):
+        native, rust = native_factory(*args), rust_factory(*args)
+
+        def apply(mod, _ctx):
+            kind, result = _compare_on(native, rust, mod, compared)
+            if stop:
+                raise _StopPipeline()
+            if kind == "error":
+                raise result
+            return result
+
+        return tvm_tirx.transform.module_pass(apply, opt_level=0, name=f"tirx.{name}")
+
+    return factory
+
+
+class _StopPipeline(Exception):
+    pass
+
+
+def _assert_all_agree(compared, minimum):
+    failures = []
+    for agree, kind, _, expected, actual in compared:
+        if agree:
+            continue
+        if kind == "ok" and not isinstance(actual, Exception):
+            detail = tvm_ffi.get_first_structural_mismatch(expected, actual, map_free_vars=True)
+        else:
+            detail = (expected, actual)
+        failures.append(f"native {kind}: {detail!s:.600}")
+    assert not failures, "\n".join(failures)
+    assert len(compared) >= minimum, f"only {len(compared)} inputs compared"
+
+
+def _load_upstream(relative):
+    import importlib.util  # pylint: disable=import-outside-toplevel
+
+    path = HERE.parent.parent / relative
+    spec = importlib.util.spec_from_file_location(f"upstream_{path.stem}", path)
+    module = importlib.util.module_from_spec(spec)
+    # TVMScript finds the source of a class through its module.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_split_host_device_upstream_inputs(monkeypatch):
+    """Every input of the upstream SplitHostDevice tests, which still pass on the native results."""
+    compared = []
+    monkeypatch.setattr(
+        tvm_tirx.tirx.transform,
+        "SplitHostDevice",
+        _pipeline_comparing_factory("SplitHostDevice", compared),
+    )
+    tests = [
+        ("tests/python/tirx/transform/test_split_host_device.py", None),
+        (
+            "tests/python/tirx/test_cuda_launch.py",
+            ["test_launch_region_roundtrip_and_host_only_operands"],
+        ),
+        (
+            "tests/python/tirx/test_cuda_backend_config.py",
+            ["test_device_helpers_are_cloned_per_configuration"],
+        ),
+    ]
+    for path, names in tests:
+        module = _load_upstream(path)
+        for name in names or [n for n in vars(module) if n.startswith("test_")]:
+            getattr(module, name)()
+    _assert_all_agree(compared, 20)
+
+
+def _split_host_device_kernels():
+    """Device kernels whose SplitHostDevice input the compile pipeline produces."""
+    from tvm_tirx.script import tirx as T  # pylint: disable=import-outside-toplevel
+
+    @T.function
+    def dynamic_bytes(A: T.Tensor((1,), "int32"), n: T.int32, bytes_: T.int32):
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=32, dynamic_smem_bytes=bytes_))
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((n,), "int32", scope="shared.dyn")])
+        if T.cuda.thread_idx("x") == 0:
+            scratch[n - 1] = n
+            A[0] = scratch[n - 1]
+
+    @T.function
+    def too_few_bytes():
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=32, dynamic_smem_bytes=64))
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((128,), "int32", scope="shared.dyn")])
+        scratch[0] = T.cuda.thread_idx("x")
+
+    @T.function
+    def enough_bytes():
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=32, dynamic_smem_bytes=1024))
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((128,), "int32", scope="shared.dyn")])
+        scratch[0] = T.cuda.thread_idx("x")
+
+    @T.function
+    def undeclared_bytes(A: T.Tensor((64,), "float32"), n: T.int32):
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=(n, 2), block=(32, 2)))
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((n, 4), "float32", scope="shared.dyn")])
+        scratch[0, 0] = A[T.cuda.thread_idx("x")]
+        A[0] = scratch[0, 0]
+
+    return [dynamic_bytes, too_few_bytes, enough_bytes, undeclared_bytes]
+
+
+def test_split_host_device_cuda_launches(monkeypatch):
+    """CUDA launches sizing their dynamic shared memory, as the compile pipeline hands them over."""
+    compared = []
+    monkeypatch.setattr(
+        tvm_tirx.tirx.transform,
+        "SplitHostDevice",
+        _pipeline_comparing_factory("SplitHostDevice", compared, stop=True),
+    )
+    target = {"kind": "cuda", "backend_config": {"cuda": {"arch": "sm_80"}}}
+    for kernel in _split_host_device_kernels():
+        with pytest.raises(Exception):
+            tvm_tirx.tirx.compile(kernel, target=target)
+    _assert_all_agree(compared, 4)
+
+
+def _split_host_device_modules():
+    from tvm_tirx.script import ir as I  # pylint: disable=import-outside-toplevel
+    from tvm_tirx.script import tirx as T  # pylint: disable=import-outside-toplevel
+
+    @I.ir_module
+    class Trainium:
+        @T.function
+        def main(B: T.Tensor((16,), "float32"), A: T.Tensor((16,), "float32")):
+            T.func_attr({"target": T.target("trn", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("trn")})
+            A[0] = B[0]
+
+    @I.ir_module
+    class UntargetedScope:
+        @T.function
+        def main(A: T.Tensor((16,), "float32")):
+            T.func_attr({"target": T.target("llvm")})
+            T.region("tirx.device_scope", [])
+            A[0] = T.float32(1)
+
+    @I.ir_module
+    class MetalReturn:
+        @T.function
+        def main() -> T.int32:
+            T.func_attr({"global_symbol": "main", "target": T.target("metal", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("metal")})
+            T.launch_thread("threadIdx.x", 16)
+            return 0
+
+    @I.ir_module
+    class CudaReturn:
+        @T.function
+        def main() -> T.int32:
+            T.func_attr({"global_symbol": "main", "target": T.target("cuda", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("cuda")})
+            T.launch_thread("threadIdx.x", 16)
+            return 0
+
+    @I.ir_module
+    class LegacySharedDyn:
+        @T.function
+        def main(A: T.Tensor((16,), "float32"), n: T.int32):
+            T.func_attr({"target": T.target("cuda", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("cuda")})
+            tx = T.launch_thread("threadIdx.x", 16)
+            m: T.int32 = n * 2
+            scratch = T.alloc_tensor(ty_args=[T.Tensor((m,), "float32", scope="shared.dyn")])
+            scratch[tx] = A[tx]
+            A[tx] = scratch[tx]
+
+    @I.ir_module
+    class Placeholder:
+        @T.function
+        def main(A: T.Tensor((16,), "float32")):
+            T.func_attr({"target": T.target("cuda", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("cuda")})
+            tx = T.launch_thread("threadIdx.x", 16)
+            scratch = T.alloc_tensor(ty_args=[T.Tensor((0,), "float32", scope="shared.dyn")])
+            A[tx] = scratch[tx]
+
+    @I.ir_module
+    class TwoSharedDyn:
+        @T.function
+        def main(A: T.Tensor((16,), "float32")):
+            T.func_attr({"target": T.target("cuda", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("cuda")})
+            tx = T.launch_thread("threadIdx.x", 16)
+            first = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32", scope="shared.dyn")])
+            second = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32", scope="shared.dyn")])
+            A[tx] = first[tx] + second[tx]
+
+    @I.ir_module
+    class IncompatibleExtents:
+        @T.function
+        def main(A: T.Tensor((64,), "float32")):
+            T.func_attr({"target": T.target("cuda", host="llvm")})
+            T.region("tirx.device_scope", [], attrs={"target": T.target("cuda")})
+            tx = T.launch_thread("threadIdx.x", 16)
+            with T.launch_thread("threadIdx.x", 32) as ty:
+                A[tx + ty] = T.float32(1)
+
+    def pool(launch_fields, values, required, alloc):
+        @I.ir_module
+        class Pool:
+            @T.function
+            def main(A: T.Tensor((16,), "int32")):
+                T.func_attr({"target": T.target("cuda", host="llvm")})
+                with T.region(
+                    "tirx.device_scope",
+                    values,
+                    attrs={
+                        "target": T.target("cuda"),
+                        "cuda.launch_fields": launch_fields,
+                        "cuda.kernel_attrs": {},
+                        "cuda.smem_required": required,
+                    },
+                ):
+                    if alloc:
+                        scratch = T.alloc_tensor(
+                            ty_args=[T.Tensor((16,), "int32", scope="shared.dyn")]
+                        )
+                        scratch[0] = A[0]
+                        A[1] = scratch[0]
+                    else:
+                        A[1] = A[0]
+
+        return Pool
+
+    grid = ["grid.x", "grid.y", "grid.z", "block.x", "block.y", "block.z"]
+    pools = [
+        pool(grid, [1, 1, 1, 32, 1, 1], 256, True),
+        pool(grid, [1, 1, 1, 32, 1, 1], 16, True),
+        pool(grid, [1, 1, 1, 32, 1, 1], 128, False),
+        pool([*grid, "dynamic_smem_bytes"], [1, 1, 1, 32, 1, 1, 32], 128, False),
+        pool([*grid, "dynamic_smem_bytes"], [1, 1, 1, 32, 1, 1, 512], 128, True),
+        pool([*grid, "dynamic_smem_bytes"], [1, 1, 1, 32, 1, 1, 0], 0, False),
+    ]
+    return [
+        Trainium,
+        UntargetedScope,
+        MetalReturn,
+        CudaReturn,
+        LegacySharedDyn,
+        Placeholder,
+        TwoSharedDyn,
+        IncompatibleExtents,
+        *pools,
+    ]
+
+
+def test_split_host_device_branches():
+    """Trainium parameter order, untargeted scopes, kernel returns, legacy dynamic shared memory,
+    shared memory pools and their errors."""
+    native = tvm_tirx.tirx.transform.SplitHostDevice()
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.SplitHostDevice")()
+    compared = []
+    for mod in _split_host_device_modules():
+        _compare_on(native, rust, mod, compared)
+    _assert_all_agree(compared, 14)
+    changed = sum(
+        kind == "ok" and not tvm_ffi.structural_equal(mod, expected, map_free_vars=True)
+        for _, kind, mod, expected, _ in compared
+    )
+    failed = sum(kind == "error" for _, kind, *_ in compared)
+    assert changed >= 8 and failed >= 3, (changed, failed)
+
+
+def _flatten_tensor_module():
+    """FlattenTensor rewrites the corpus does not reach: masked loads and stores through plain and
+    strided parameters, a local tensor, and a view whose layout iterators load a local tensor."""
+    from tvm_tirx.script import tirx as T
+
+    tile = T.TileLayout.from_iters
+
+    @T.function
+    def main(
+        A: T.Tensor((4, 8), "float32"),
+        B: T.Tensor((4, 8), "float32", layout=T.TileLayout(T.S[(4, 8) : (16, 1)])),
+        k: T.int32,
+    ):
+        T.func_attr({"global_symbol": "main"})
+        mask = T.meta_var(T.Broadcast(T.bool(True), 4))
+        n = T.alloc_local([1], "int32")
+        n[0] = 4
+        data = T.alloc_shared([64], "float32")
+        view = T.decl_tensor(
+            data.data,
+            ty_args=[
+                T.Tensor(
+                    (n[0], 8),
+                    "float32",
+                    scope="shared",
+                    layout=tile(shard=[T.Iter(n[0], 8, "m"), T.Iter(8, 1, "m")], replica=[]),
+                )
+            ],
+        )
+        view[1, k] = A[1, 2]
+        loaded = T.meta_var(T.masked_load(A, k, T.Ramp(0, 1, 4), mask, ty="float32x4"))
+        T.masked_store(B, loaded, 2, T.Ramp(4, 1, 4), mask)
+        T.masked_store(
+            data,
+            T.masked_load(view, 1, T.Ramp(0, 1, 4), mask, ty="float32x4"),
+            T.Ramp(k, 1, 4),
+            mask,
+        )
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def test_flatten_tensor_masked_accesses():
+    native = tvm_tirx.tirx.transform.FlattenTensor()(_flatten_tensor_module())
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.FlattenTensor")()(_flatten_tensor_module())
+    assert not tvm_ffi.structural_equal(native, _flatten_tensor_module(), map_free_vars=True)
+    assert tvm_ffi.structural_equal(native, rust, map_free_vars=True)
+
+
+def _lower_tensor_layouts_module():
+    """LowerTensorLayouts rewrites the corpus does not reach: a tensor bound to a parameter with a
+    layout, allocations spanning a tile layout's replica and offset and an unaligned swizzle over
+    a gapped tile, and a declaration flattening leaves alone."""
+    from tvm_tirx.script import tirx as T
+
+    tile = T.TileLayout.from_iters
+
+    @T.function
+    def main(
+        A: T.Tensor(
+            (8, 16), "float32", layout=tile(shard=[T.Iter(8, 32, "m"), T.Iter(16, 1, "m")])
+        ),
+        B: T.Tensor((64,), "float32"),
+        n: T.int32,
+    ):
+        T.func_attr({"target": T.target("cuda"), "global_symbol": "main"})
+        V: T.let[
+            T.Tensor(
+                (8, 16), "float32", layout=tile(shard=[T.Iter(8, 32, "m"), T.Iter(16, 1, "m")])
+            )
+        ] = A
+        S = T.alloc_tensor(
+            ty_args=[
+                T.Tensor(
+                    (4, 4),
+                    "float32",
+                    scope="shared",
+                    layout=tile(
+                        shard=[T.Iter(4, 8, "m"), T.Iter(4, 1, "m")],
+                        replica=[T.Iter(2, 64, "m")],
+                        offset={"m": 3},
+                    ),
+                )
+            ]
+        )
+        W = T.alloc_tensor(
+            ty_args=[
+                T.Tensor(
+                    (8, 64),
+                    "float16",
+                    scope="shared",
+                    layout=T.ComposeLayout(
+                        3,
+                        3,
+                        3,
+                        tile(shard=[T.Iter(8, 128, "m"), T.Iter(64, 1, "m")]),
+                        swizzle_inner=False,
+                    ),
+                )
+            ]
+        )
+        ptr: T.let[T.Ptr(T.float32, "shared")] = T.reinterpret(B[0], ty=T.Ptr(T.float32, "shared"))
+        D = T.decl_tensor(ptr, ty_args=[T.Tensor((64,), "float32", scope="shared", layout=None)])
+        S[1, 2] = A[n, 3]
+        V[n, 2] = T.float32(1)
+        W[2, 5] = T.float16(1)
+        D[n] = B[n] + S[3, 3]
+        T.evaluate(T.call_extern("use", V.data, ty="int32"))
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def test_lower_tensor_layouts_layouts():
+    native = tvm_ffi.get_global_func("tirx.transform.LowerTensorLayouts")()(
+        _lower_tensor_layouts_module()
+    )
+    rust = tvm_ffi.get_global_func("rust.tirx.transform.LowerTensorLayouts")()(
+        _lower_tensor_layouts_module()
+    )
+    assert not tvm_ffi.structural_equal(native, _lower_tensor_layouts_module(), map_free_vars=True)
+    assert tvm_ffi.structural_equal(native, rust, map_free_vars=True)
+
+
+def _rejected_tensor_modules():
+    """A direct access through a thread-axis layout, a projection of an undefined tensor, and a
+    DeclTensor alias over one."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def thread_axis(n: T.int32):
+        T.func_attr({"target": T.target("cuda"), "global_symbol": "thread_axis"})
+        S = T.alloc_tensor(
+            ty_args=[
+                T.Tensor(
+                    (32, 4),
+                    "float32",
+                    scope="local",
+                    layout=T.TileLayout.from_iters(
+                        shard=[T.Iter(32, 1, "laneid"), T.Iter(4, 1, "m")]
+                    ),
+                )
+            ]
+        )
+        S[0, n] = T.float32(1)
+
+    undefined = tvm_tirx.tirx.Var("W", tvm_tirx.tirx.TensorType((4,), "float32"))
+    target = tvm_tirx.target.Target("cuda")
+
+    def function(stmt):
+        func = tvm_tirx.tirx.Function([], stmt)
+        return tvm_tirx.IRModule(
+            {"main": func.with_attr({"target": target, "global_symbol": "main"})}
+        )
+
+    projection = function(
+        tvm_tirx.ir.Evaluate(tvm_tirx.tirx.call_extern("use", undefined.data, ty="int32"))
+    )
+    alias = tvm_tirx.tirx.Var("V", tvm_tirx.tirx.TensorType((4,), "float32"))
+    declaration = tvm_tirx.ir.Call(
+        tvm_tirx.ir.Op.get("tirx.decl_tensor"), [undefined.data], ty=alias.ty, ty_args=[alias.ty]
+    )
+    aliased = function(
+        tvm_tirx.ir.SeqStmt(
+            [
+                tvm_tirx.ir.Bind(alias, declaration),
+                tvm_tirx.ir.Evaluate(tvm_tirx.tirx.call_extern("use", alias.data, ty="int32")),
+            ]
+        )
+    )
+    return tvm_tirx.IRModule({"main": thread_axis}), projection, aliased
+
+
+@pytest.mark.parametrize("name", ["FlattenTensor", "LowerTensorLayouts"])
+def test_rejected_tensor_accesses(name):
+    thread_axis, projection, aliased = _rejected_tensor_modules()
+    if name == "FlattenTensor":
+        cases = [
+            (projection, "Tensor W is used before its definition"),
+            (aliased, "Tensor W is used before its definition"),
+        ]
+    else:
+        cases = [
+            (
+                thread_axis,
+                "Cannot lower direct TensorLoad/TensorStore on a tensor with thread-axis",
+            ),
+            (projection, "tensor_data_ptr projects W, which has no visible definition"),
+            (aliased, "Tensor alias source W must be registered before its DeclTensor alias"),
+        ]
+    for prefix in ("", "rust."):
+        pass_ = tvm_ffi.get_global_func(f"{prefix}tirx.transform.{name}")()
+        for module, message in cases:
+            with pytest.raises(Exception, match=message):
+                pass_(module)
+
+
+def test_lower_tensor_layouts_requires_a_target():
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((4, 4), "float32")):
+        A[1, 2] = T.float32(1)
+
+    for prefix in ("", "rust."):
+        pass_ = tvm_ffi.get_global_func(f"{prefix}tirx.transform.LowerTensorLayouts")()
+        with pytest.raises(Exception, match="Target context required"):
+            pass_(tvm_tirx.IRModule({"main": main}))
+        with tvm_tirx.target.Target("cuda"):
+            pass_(tvm_tirx.IRModule({"main": main}))
 
 
 def _renormalize_split_pattern_module():
@@ -920,3 +1788,360 @@ def test_force_narrow_index_to_i32_rejects_wide_integers():
         for module in _force_narrow_rejected():
             with pytest.raises(RuntimeError):
                 pass_(module)
+
+
+def _storage_rewrite_threads():
+    """Thread regions: the hardware axes share the outer one's allocation scope, where shared
+    storage is reused; a vthread opens a scope of its own."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((64,), "float32"), B: T.Tensor((64,), "float32")):
+        T.func_attr({"target": T.target("cuda"), "global_symbol": "main"})
+        with T.launch_thread("blockIdx.x", 2) as bx:
+            with T.launch_thread("threadIdx.x", 32) as tx:
+                S = T.alloc_tensor(ty_args=[T.Tensor((32,), "float32", scope="shared")])
+                S[tx] = A[bx * 32 + tx]
+                R = T.alloc_tensor(ty_args=[T.Tensor((32,), "float32", scope="shared")])
+                R[tx] = S[tx] + T.float32(1)
+                B[bx * 32 + tx] = R[tx]
+                Q = T.alloc_tensor(ty_args=[T.Tensor((32,), "float32", scope="shared")])
+                Q[tx] = B[tx] * T.float32(2)
+                A[tx] = Q[tx]
+        with T.launch_thread("vthread", 2) as vt:
+            V = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32")])
+            for i in range(16):
+                V[i] = A[vt * 16 + i]
+            W = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32")])
+            for i in range(16):
+                W[i] = V[i] * T.float32(3)
+            for i in range(16):
+                B[vt * 16 + i] = W[i]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_inplace():
+    """In-place updates: `Y[i] = f(X[i])` writes over X; an indirect load, a shifted read, a
+    reduction, and a volatile allocation do not."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(
+        A: T.Tensor((64,), "float32"), Idx: T.Tensor((64,), "int32"), B: T.Tensor((64,), "float32")
+    ):
+        T.func_attr({"global_symbol": "main"})
+        X = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(64):
+            X[i] = A[i]
+        Y = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(64):
+            Y[i] = X[i] + T.float32(1)
+        Z = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(64):
+            Z[i] = Y[Idx[i]] * T.float32(2)
+        U = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(63):
+            U[i] = Z[i + 1]
+        V = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(64):
+            V[i] = U[i]
+            V[i] = V[i] + U[i]
+        W = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        for i in range(64):
+            if i < 32:
+                W[i] = V[i] - T.float32(1)
+        for i in range(64):
+            B[i] = W[i]
+        P = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32")])
+        P[0] = B[0]
+        Q = T.alloc_tensor(
+            ty_args=[T.Tensor((64,), "float32")], annotations={"tirx.volatile": True}
+        )
+        Q[0] = P[0]
+        B[1] = Q[0]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_reuse():
+    """Reuse: symbolic sizes round robin, a larger buffer takes a smaller freed one (a merged
+    size), a large extent widens to int64, and branches and asserts as scopes."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(n: T.int32, A: T.Tensor((1024,), "float32"), B: T.Tensor((1024,), "float32")):
+        T.func_attr({"global_symbol": "main"})
+        S1 = T.alloc_tensor(ty_args=[T.Tensor((n,), "float32")])
+        for i in range(n):
+            S1[i] = A[i]
+        B[0] = S1[0]
+        S2 = T.alloc_tensor(ty_args=[T.Tensor((n,), "float32")])
+        for i in range(n):
+            S2[i] = A[i] + T.float32(1)
+        B[1] = S2[0]
+        X = T.alloc_tensor(ty_args=[T.Tensor((256,), "float32")])
+        for i in range(256):
+            X[i] = A[i]
+        B[2] = X[255]
+        Y = T.alloc_tensor(ty_args=[T.Tensor((1024,), "float32")])
+        for i in range(1024):
+            Y[i] = A[i] * T.float32(2)
+        B[3] = Y[1023]
+        L = T.alloc_tensor(ty_args=[T.Tensor((16777216,), "float32")])
+        L[0] = A[0]
+        B[4] = L[0]
+        M = T.alloc_tensor(ty_args=[T.Tensor((268435456,), "float32")])
+        M[0] = A[1]
+        B[5] = M[0]
+        if n > 4:
+            C = T.alloc_tensor(ty_args=[T.Tensor((128,), "float32")])
+            C[0] = A[0]
+            B[6] = C[0]
+        else:
+            D = T.alloc_tensor(ty_args=[T.Tensor((128,), "float32")])
+            D[0] = A[1]
+            B[6] = D[0]
+        assert n > 0, "positive"
+        E = T.alloc_tensor(ty_args=[T.Tensor((128,), "float32")])
+        E[0] = A[2]
+        B[7] = E[0]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_dtypes(target):
+    """Reuse across dtypes (Vulkan and WebGPU reuse only identical ones), and pointers into
+    packed single-allocation storage (`local.L0A`, registered by the upstream suite)."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((256,), "float32"), B: T.Tensor((256,), "int32")):
+        T.func_attr({"target": T.target(target), "global_symbol": "main"})
+        X = T.alloc_tensor(ty_args=[T.Tensor((256,), "int32")])
+        for i in range(256):
+            X[i] = B[i]
+        B[0] = X[255]
+        Y = T.alloc_tensor(ty_args=[T.Tensor((256,), "float32")])
+        for i in range(256):
+            Y[i] = A[i]
+        A[0] = Y[255]
+        P = T.alloc_tensor(ty_args=[T.Tensor((64,), "float16", "local.L0A")])
+        Q = T.alloc_tensor(ty_args=[T.Tensor((64,), "int32", "local.L0A")])
+        for i in range(64):
+            P[i] = T.Cast("float16", A[i])
+            Q[i] = B[i]
+        T.evaluate(T.call_extern("consume", P.data, Q.data, ty="int32"))
+        A[2] = T.Cast("float32", P[0]) + T.Cast("float32", Q[0])
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_vector_merge():
+    """A vector allocation reusing a scalar one is sized by the widest element type; the scalar
+    accesses then fail the PointerValueTypeRewrite that StorageRewrite ends with."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((256,), "float32")):
+        T.func_attr({"global_symbol": "main"})
+        Y = T.alloc_tensor(ty_args=[T.Tensor((256,), "float32")])
+        for i in range(256):
+            Y[i] = A[i]
+        A[0] = Y[255]
+        V = T.alloc_tensor(ty_args=[T.Tensor((64,), "float32x4")])
+        for i in range(64):
+            V[i] = A[T.Ramp(i * 4, 1, 4)]
+        A[T.Ramp(0, 1, 4)] = V[63]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_masked():
+    """Masked accesses to planned and to retyped tensors."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((16,), "float32"), B: T.Tensor((16,), "float32")):
+        T.func_attr({"global_symbol": "main"})
+        mask = T.Broadcast(T.bool(True), 4)
+        X = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32")])
+        for i in range(4):
+            T.evaluate(
+                T.call_intrin(
+                    "tirx.masked_store",
+                    X,
+                    T.call_intrin("tirx.masked_load", A, T.Ramp(i * 4, 1, 4), mask, ty="float32x4"),
+                    T.Ramp(i * 4, 1, 4),
+                    mask,
+                    ty="void",
+                )
+            )
+        B[0] = X[0]
+        Y = T.alloc_tensor(ty_args=[T.Tensor((16,), "float32")])
+        for i in range(4):
+            Y[T.Ramp(i * 4, 1, 4)] = T.call_intrin(
+                "tirx.masked_load", A, T.Ramp(i * 4, 1, 4), mask, ty="float32x4"
+            )
+        for i in range(4):
+            T.evaluate(
+                T.call_intrin(
+                    "tirx.masked_store",
+                    B,
+                    T.call_intrin("tirx.masked_load", Y, T.Ramp(i * 4, 1, 4), mask, ty="float32x4"),
+                    T.Ramp(i * 4, 1, 4),
+                    mask,
+                    ty="void",
+                )
+            )
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_vectors():
+    """Retyping: an allocation accessed as float32x4 whose data pointer is bound to a scalar
+    pointer and passed on, a declaration over a pointer parameter, and an untyped pointer."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(
+        A: T.Tensor((32,), "float32"),
+        Bptr: T.handle("float32"),
+        C: T.Tensor((32,), "float32"),
+        D: T.handle(),
+    ):
+        T.func_attr({"global_symbol": "main"})
+        B = T.decl_tensor(Bptr, ty_args=[T.Tensor((32,), "float32")])
+        X = T.alloc_tensor(ty_args=[T.Tensor((32,), "float32")])
+        for i in range(8):
+            X[T.Ramp(i * 4, 1, 4)] = A[T.Ramp(i * 4, 1, 4)]
+        for i in range(8):
+            B[T.Ramp(i * 4, 1, 4)] = X[T.Ramp(i * 4, 1, 4)]
+        p: T.let = X.data
+        T.evaluate(T.call_extern("consume", p, X.data, D, ty="int32"))
+        for i in range(8):
+            C[T.Ramp(i * 4, 1, 4)] = A[T.Ramp(i * 4, 1, 4)] + B[T.Ramp(i * 4, 1, 4)]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+def _storage_rewrite_two_dimensional():
+    """A two-dimensional allocation cannot be planned: both sides reject it."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def main(A: T.Tensor((16,), "float32")):
+        T.func_attr({"global_symbol": "main"})
+        X = T.alloc_tensor(ty_args=[T.Tensor((4, 4), "float32")])
+        for i in range(4):
+            X[i, 0] = A[i]
+        A[0] = X[3, 0]
+
+    return tvm_tirx.IRModule({"main": main})
+
+
+_STORAGE_REWRITE_MODULES = {
+    "threads": _storage_rewrite_threads,
+    "inplace": _storage_rewrite_inplace,
+    "reuse": _storage_rewrite_reuse,
+    "dtypes[llvm]": lambda: _storage_rewrite_dtypes("llvm"),
+    "dtypes[vulkan]": lambda: _storage_rewrite_dtypes("vulkan"),
+    "dtypes[webgpu]": lambda: _storage_rewrite_dtypes("webgpu"),
+    "vector_merge": _storage_rewrite_vector_merge,
+    "masked": _storage_rewrite_masked,
+    "vectors": _storage_rewrite_vectors,
+    "two_dimensional": _storage_rewrite_two_dimensional,
+}
+
+
+@pytest.mark.parametrize("name", list(_STORAGE_REWRITE_MODULES))
+@pytest.mark.parametrize(
+    "factory,config",
+    [
+        ("StorageRewrite", {}),
+        # MergeSharedMemoryAllocations takes over reuse.
+        ("StorageRewrite", {"tirx.merge_static_smem": True}),
+        ("PointerValueTypeRewrite", {}),
+    ],
+    ids=["StorageRewrite", "StorageRewrite[merge_static_smem]", "PointerValueTypeRewrite"],
+)
+def test_storage_rewrite_branches(name, factory, config):
+    outcome = []
+    for prefix in ("", "rust."):
+        pass_ = tvm_ffi.get_global_func(f"{prefix}tirx.transform.{factory}")()
+        try:
+            with tvm_tirx.transform.PassContext(config=config):
+                outcome.append(("ok", pass_(_STORAGE_REWRITE_MODULES[name]())))
+        except Exception as error:
+            outcome.append(("error", error))
+    (native_kind, expected), (rust_kind, actual) = outcome
+    assert native_kind == rust_kind, f"native {native_kind}, rust {rust_kind}: {expected or actual}"
+    if native_kind == "ok":
+        assert tvm_ffi.structural_equal(expected, actual, map_free_vars=True), (
+            tvm_ffi.get_first_structural_mismatch(expected, actual, map_free_vars=True)
+        )
+    if factory == "StorageRewrite" and native_kind == "ok":
+        # Every module has allocations to plan.
+        original = _STORAGE_REWRITE_MODULES[name]()
+        assert not tvm_ffi.structural_equal(original, expected, map_free_vars=True)
+
+
+def _parametrizations(test):
+    """Keyword arguments of every case of a test's `pytest.mark.parametrize` marks."""
+    axes = []
+    for mark in getattr(test, "pytestmark", []):
+        if mark.name != "parametrize":
+            continue
+        names, values = mark.args[0], mark.args[1]
+        if isinstance(names, str):
+            names = [name.strip() for name in names.split(",")]
+        axes.append([dict(zip(names, value if len(names) > 1 else (value,))) for value in values])
+    for combination in itertools.product(*axes):
+        yield {key: value for case in combination for key, value in case.items()}
+
+
+def _upstream_tests():
+    for factory, path in SUITES.items():
+        for node in ast.parse((REPO / path).read_text()).body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                yield pytest.param(factory, node.name, id=f"{factory}::{node.name}")
+
+
+def _dual_run(factory, runs):
+    """A factory for `tirx.transform.<factory>` that runs the C++ pass and, on a copy of the
+    module, the Rust one, requires them to agree, and returns the C++ result."""
+    native_factory = getattr(tvm_tirx.tirx.transform, factory)
+    rust_factory = tvm_ffi.get_global_func(f"rust.tirx.transform.{factory}")
+
+    def make():
+        native, rust = native_factory(), rust_factory()
+
+        def run(mod, _ctx):
+            copy = tvm_tirx.ir.load_json(tvm_tirx.ir.save_json(mod))
+            try:
+                expected = native(mod)
+            except Exception:
+                with pytest.raises(Exception):
+                    rust(copy)
+                runs.append("both failed")
+                raise
+            actual = rust(copy)
+            assert tvm_ffi.structural_equal(expected, actual, map_free_vars=True), (
+                tvm_ffi.get_first_structural_mismatch(expected, actual, map_free_vars=True)
+            )
+            runs.append("compared")
+            return expected
+
+        return tvm_tirx.transform.module_pass(run, opt_level=0, name=f"parity.{factory}")
+
+    return make
+
+
+@pytest.mark.parametrize("factory,test_name", list(_upstream_tests()))
+def test_upstream_suite_parity(monkeypatch, factory, test_name):
+    test = getattr(_suite(factory), test_name)
+    runs = []
+    monkeypatch.setattr(tvm_tirx.tirx.transform, factory, _dual_run(factory, runs))
+    for kwargs in _parametrizations(test):
+        test(**kwargs)
+    assert runs, f"{test_name} never ran {factory}"

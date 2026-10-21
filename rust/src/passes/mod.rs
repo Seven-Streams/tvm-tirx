@@ -36,17 +36,25 @@ pub mod convert_ssa;
 pub mod data_type_rewriter;
 pub mod decorate_device_scope;
 pub mod dtype_conversion;
+pub mod flatten_tensor;
+pub mod flattened_tensor;
 pub mod force_narrow_index_to_i32;
 pub mod function_utils;
 pub mod hoist_if;
 pub mod lower_intrin;
+pub mod lower_tensor_layouts;
+pub mod lower_tvm_builtin;
+pub mod make_packed_api;
 pub mod narrow_datatype;
 pub mod remove_no_op;
 pub mod renormalize_split_pattern;
 pub mod side_effect;
 pub mod skip_assert;
+pub mod split_host_device;
 pub mod stmt_simplify;
+pub mod storage_rewrite;
 pub mod substitute_dtype;
+pub mod tvm_ffi_binder;
 pub mod unroll_loop;
 pub mod unsupported_dtype_legalize;
 pub mod util;
@@ -83,10 +91,14 @@ pub fn factories() -> Vec<(&'static str, FfiFunction)> {
                 Ok(Any::from(function_utils::filter(FfiFunction::try_from(args[0])?)?))
             }),
         ),
+        ("FlattenTensor", nullary(flatten_tensor::flatten_tensor)),
         ("ForceNarrowIndexToInt32", nullary(force_narrow_index_to_i32::force_narrow_index_to_i32)),
         ("HoistIf", nullary(hoist_if::hoist_if)),
         ("InsertHoistedIf", nullary(hoist_if::insert_hoisted_if)),
         ("LowerIntrin", nullary(lower_intrin::lower_intrin)),
+        ("LowerTensorLayouts", nullary(lower_tensor_layouts::lower_tensor_layouts)),
+        ("LowerTVMBuiltin", nullary(lower_tvm_builtin::lower_tvm_builtin)),
+        ("MakePackedAPI", nullary(make_packed_api::make_packed_api)),
         (
             "NarrowDataType",
             FfiFunction::from_packed(|args: &[AnyView]| -> Result<Any> {
@@ -94,10 +106,13 @@ pub fn factories() -> Vec<(&'static str, FfiFunction)> {
                 Ok(Any::from(narrow_datatype::narrow_datatype(target_bits)?))
             }),
         ),
+        ("PointerValueTypeRewrite", nullary(storage_rewrite::pointer_value_type_rewrite)),
         ("RemoveNoOp", nullary(remove_no_op::remove_no_op)),
         ("RenormalizeSplitPattern", nullary(renormalize_split_pattern::renormalize_split_pattern)),
         ("SkipAssert", nullary(skip_assert::skip_assert)),
+        ("SplitHostDevice", nullary(split_host_device::split_host_device)),
         ("StmtSimplify", nullary(stmt_simplify::stmt_simplify)),
+        ("StorageRewrite", nullary(storage_rewrite::storage_rewrite)),
         ("UnrollLoop", nullary(unroll_loop::unroll_loop)),
         ("VerifyMemory", nullary(verify_memory::verify_memory)),
     ]
