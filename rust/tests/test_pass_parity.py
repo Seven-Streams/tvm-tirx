@@ -112,6 +112,27 @@ CASES = {
     "Filter[device]": dict(
         factory="Filter", sources=["tirx.Filter"], args=(lambda f: not _is_host_function(f),)
     ),
+    # The legalizers leave functions alone on a target with native bfloat16 / float8 support, so
+    # the records of every pass around them in the host pipeline are inputs too.
+    "BF16ComputeLegalize": dict(
+        sources=["tirx.BF16ComputeLegalize", "tirx.BF16StorageLegalize", "tirx.FP8ComputeLegalize"]
+    ),
+    "BF16StorageLegalize": dict(
+        sources=["tirx.BF16StorageLegalize", "tirx.BF16ComputeLegalize", "tirx.FP8StorageLegalize"]
+    ),
+    "FP8ComputeLegalize[float16]": dict(
+        factory="FP8ComputeLegalize",
+        sources=["tirx.FP8ComputeLegalize", "tirx.BF16ComputeLegalize"],
+        args=("float16",),
+    ),
+    "FP8ComputeLegalize[float32]": dict(
+        factory="FP8ComputeLegalize",
+        sources=["tirx.FP8ComputeLegalize", "tirx.BF16ComputeLegalize"],
+        args=("float32",),
+    ),
+    "FP8StorageLegalize": dict(
+        sources=["tirx.FP8StorageLegalize", "tirx.FP8ComputeLegalize", "tirx.BF16StorageLegalize"]
+    ),
     # Few inputs come to RenormalizeSplitPattern itself; the split patterns appear in the inputs of
     # many passes after it.
     "RenormalizeSplitPattern": dict(
@@ -125,6 +146,39 @@ CASES = {
             "tirx.VectorizeLoop",
             "tirx.NarrowDataType",
             "tirx.MakePackedAPI",
+        ]
+    ),
+    "NarrowDataType": dict(
+        sources=[
+            "tirx.NarrowDataType",
+            "tirx.FlattenTensor",
+            "tirx.VectorizeLoop",
+            "tirx.UnrollLoop",
+            "tirx.LowerThreadAllreduce",
+        ],
+        args=(32,),
+    ),
+    # A narrower target narrows the int32 indices, shapes and thread extents of the corpus too.
+    "NarrowDataType[16]": dict(
+        factory="NarrowDataType",
+        sources=[
+            "tirx.NarrowDataType",
+            "tirx.BF16ComputeLegalize",
+            "tirx.FlattenTensor",
+            "tirx.VectorizeLoop",
+            "tirx.LowerThreadAllreduce",
+        ],
+        args=(16,),
+    ),
+    # ForceNarrowIndexToInt32 is not in the default pipeline; it runs on NarrowDataType's inputs
+    # and on the lowered modules around it.
+    "ForceNarrowIndexToInt32": dict(
+        sources=[
+            "tirx.NarrowDataType",
+            "tirx.FlattenTensor",
+            "tirx.LowerTensorLayouts",
+            "tirx.MakePackedAPI",
+            "tirx.VectorizeLoop",
         ]
     ),
 }
@@ -422,6 +476,169 @@ def test_common_subexpr_elim_unit_inputs(monkeypatch):
     assert len(compared) >= 20
 
 
+_DTYPE_LEGALIZE_PASSES = [
+    "BF16ComputeLegalize",
+    "BF16StorageLegalize",
+    "FP8ComputeLegalize",
+    "FP8StorageLegalize",
+]
+
+
+def _comparing_factory(name, compared):
+    """A stand-in for `tvm_tirx.tirx.transform.<name>` whose passes run the native and the Rust pass
+    on copies of the input, require the same result (or the same error), and return the native
+    one."""
+    native_factory = getattr(tvm_tirx.tirx.transform, name)
+    rust_factory = tvm_ffi.get_global_func(f"rust.tirx.transform.{name}")
+
+    def factory(*args):
+        native, rust = native_factory(*args), rust_factory(*args)
+
+        def run(mod):
+            text = tvm_tirx.ir.save_json(mod)
+            try:
+                expected = native(tvm_tirx.ir.load_json(text))
+            except Exception as error:
+                with pytest.raises(type(error)):
+                    rust(tvm_tirx.ir.load_json(text))
+                raise
+            actual = rust(tvm_tirx.ir.load_json(text))
+            tvm_tirx.ir.assert_structural_equal(actual, expected, map_free_vars=True)
+            compared.append(name)
+            return expected
+
+        return run
+
+    return factory
+
+
+@pytest.mark.parametrize("family", ["bf16", "fp8"])
+def test_dtype_legalize_unit_inputs(family, monkeypatch):
+    """Every input of the native bf16 / fp8 legalize tests, legalized by both passes."""
+    import importlib.util
+    import inspect
+
+    path = HERE.parent.parent / "tests/python/tirx/transform" / (f"test_{family}_legalize.py")
+    spec = importlib.util.spec_from_file_location(f"_native_{family}_legalize_tests", path)
+    module = importlib.util.module_from_spec(spec)
+    # TVMScript reads the source of the module a parsed function belongs to.
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    compared = []
+    for name in _DTYPE_LEGALIZE_PASSES:
+        monkeypatch.setattr(tvm_tirx.tirx.transform, name, _comparing_factory(name, compared))
+    for test_name in sorted(dir(module)):
+        test = getattr(module, test_name)
+        if not test_name.startswith("test_") or not callable(test):
+            continue
+        if not inspect.signature(test).parameters:
+            test()
+            continue
+        for dtype in ("float8_e4m3fn", "float8_e5m2"):
+            for promote_dtype in ("float16", "float32"):
+                test(dtype=dtype, promote_dtype=promote_dtype)
+    print(f"{family}: {len(compared)} pass runs compared")
+    assert compared
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float8_e3m4",
+        "float8_e4m3",
+        "float8_e4m3b11fnuz",
+        "float8_e4m3fn",
+        "float8_e4m3fnuz",
+        "float8_e5m2",
+        "float8_e5m2fnuz",
+        "float8_e8m0fnu",
+    ],
+)
+@pytest.mark.parametrize("promote_dtype", ["float16", "float32", "float64", "bfloat16"])
+def test_fp8_legalize_formats(dtype, promote_dtype, monkeypatch):
+    """Compute then storage legalization of every float8 format, through each promoted type: the
+    rounding, exponent and bias branches of the bit-level conversion."""
+    import importlib.util
+
+    path = HERE.parent.parent / "tests/python/tirx/transform/test_fp8_legalize.py"
+    spec = importlib.util.spec_from_file_location("_native_fp8_formats", path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    compared = []
+    compute = _comparing_factory("FP8ComputeLegalize", compared)
+    storage = _comparing_factory("FP8StorageLegalize", compared)
+    target = tvm_tirx.target.Target("llvm")
+    before = tvm_tirx.tirx.transform.BindTarget(target)(module.get_before(dtype))
+    try:
+        after = storage()(compute(promote_dtype)(before))
+    except Exception:  # pylint: disable=broad-except
+        # Both sides failed with the same kind of error (checked by the stand-in factory).
+        return
+    assert compared == ["FP8ComputeLegalize", "FP8StorageLegalize"]
+    assert not tvm_ffi.structural_equal(after, before)
+
+
+def _legalize_module(dtype):
+    """Scalar and vector computation on `dtype`: bindings, Let, Select, min / max, comparisons,
+    casts, constants, broadcasts and shuffles; one allocation is reached through a pointer, so
+    it keeps its type, and one is not, so compute legalization promotes it."""
+    from tvm_tirx.script import ir as I
+    from tvm_tirx.script import tirx as T
+
+    z = T.dynamic("z", dtype)
+
+    @I.ir_module
+    class Module:
+        @T.function
+        def scalars(Aptr: T.handle(dtype), Bptr: T.handle("float32")):
+            T.func_attr({"global_symbol": "scalars"})
+            A = T.decl_tensor(Aptr, ty_args=[T.Tensor((8,), dtype, data=Aptr)])
+            B = T.decl_tensor(Bptr, ty_args=[T.Tensor((8,), "float32", data=Bptr)])
+            C = T.alloc_tensor(ty_args=[T.Tensor((8,), dtype)])
+            for i in range(8):
+                x: T.let = A[i] * T.FloatImm(dtype, 2.0)
+                y: T.let = T.max(x, T.min(A[i], T.FloatImm(dtype, 1.5)))
+                C[i] = T.Select(x < y, x, T.Cast(dtype, B[i]))
+                B[i] = T.Cast("float32", C[i]) + T.Cast("float32", T.Let(z + y, where={z: A[i]}))
+            T.evaluate(T.call_extern("consume", C.data, ty="void"))
+
+        @T.function
+        def vectors(Aptr: T.handle(dtype), Bptr: T.handle(dtype)):
+            T.func_attr({"global_symbol": "vectors"})
+            A = T.decl_tensor(Aptr, ty_args=[T.Tensor((8,), dtype, data=Aptr)])
+            B = T.decl_tensor(Bptr, ty_args=[T.Tensor((8,), dtype, data=Bptr)])
+            D = T.alloc_tensor(ty_args=[T.Tensor((8,), dtype)])
+            D[T.Ramp(0, 1, 4)] = A[T.Ramp(0, 1, 4)] + T.Broadcast(T.FloatImm(dtype, 1.0), 4)
+            D[T.Ramp(4, 1, 4)] = T.Shuffle([A[T.Ramp(4, 1, 4)]], [3, 2, 1, 0])
+            B[T.Ramp(0, 1, 4)] = T.max(D[T.Ramp(0, 1, 4)], D[T.Ramp(4, 1, 4)])
+            for i in range(8):
+                if A[i] >= B[i]:
+                    B[i] = T.exp(A[i]) / B[i] - A[i]
+                B[i] = T.Cast(dtype, T.Cast("float32", A[i]) * T.float32(0.5))
+
+    return Module
+
+
+@pytest.mark.parametrize(
+    "dtype, compute, compute_args, storage",
+    [
+        ("bfloat16", "BF16ComputeLegalize", (), "BF16StorageLegalize"),
+        ("float8_e4m3fn", "FP8ComputeLegalize", ("float16",), "FP8StorageLegalize"),
+        ("float8_e5m2", "FP8ComputeLegalize", ("float32",), "FP8StorageLegalize"),
+    ],
+)
+@pytest.mark.parametrize("target", [None, "llvm", "nvidia/geforce-rtx-2080-ti", "cuda"])
+def test_dtype_legalize_branches(dtype, compute, compute_args, storage, target):
+    compared = []
+    module = _legalize_module(dtype)
+    if target is not None:
+        module = tvm_tirx.tirx.transform.BindTarget(tvm_tirx.target.Target(target))(module)
+    after_compute = _comparing_factory(compute, compared)(*compute_args)(module)
+    _comparing_factory(storage, compared)()(after_compute)
+    assert compared == [compute, storage]
+
+
 def _renormalize_split_pattern_module():
     """Every RenormalizeSplitPattern rule, matching and not: floordiv of floormod (scalar and
     broadcast, divisible or not), unsigned types, the factoring rules with two and three terms
@@ -501,3 +718,205 @@ def test_renormalize_split_pattern_rules():
     assert tvm_ffi.structural_equal(native, rust, map_free_vars=True), (
         tvm_ffi.get_first_structural_mismatch(native, rust, map_free_vars=True)
     )
+
+
+def _narrow_datatype_module():
+    """NarrowDataType branches: casts, Lets (nested, with bodies analyzed under the variable's
+    bound), Select/if_then_else, arithmetic and comparisons, clz, shifts and bitwise operations,
+    vector lanes, unused loop variables, symbolic and overflowing extents, and launched threads."""
+    from tvm_tirx.script import tirx as T
+
+    x, y, z, w = (tvm_tirx.tirx.Var(name, "int64") for name in "xyzw")
+
+    @T.function
+    def exprs(A: T.Tensor((T.int64(64),), "float32"), B: T.Tensor((T.int64(64),), "int64")):
+        T.func_attr({"global_symbol": "exprs"})
+        for i in range(T.int64(8)):
+            A[i * T.int64(8)] = A[T.Cast("int64", i)] + T.float32(1)
+        for i in range(T.int64(8)):
+            A[T.Let(x * T.int64(2), where={x: i})] = T.float32(2)
+        for i in range(T.int64(8)):
+            A[i] = A[T.Let(y * T.int64(2), where={y: T.int64(3)})]
+        for i in range(T.int64(8)):
+            A[T.Let(T.Let(z + w, where={w: z * T.int64(2)}), where={z: i})] = T.float32(2)
+        for i, j in T.grid(T.int64(8), T.int64(8)):
+            A[T.Select(i < j, i, j)] = A[T.if_then_else(i >= T.int64(1), i - T.int64(1), j)]
+        for i, j in T.grid(T.int64(8), T.int64(8)):
+            A[T.min(i, j) + T.max(i, j) + T.floordiv(i, T.int64(2)) + T.floormod(j, T.int64(3))] = (
+                A[T.truncdiv(i, T.int64(2)) + T.truncmod(j, T.int64(3))]
+            )
+        for i in range(T.int64(8)):
+            if (
+                (i * T.int64(8) != T.int64(5) and i <= T.int64(6))
+                or i > T.int64(7)
+                or i == T.int64(1)
+            ):
+                A[i] = T.float32(3)
+        for i in range(T.int64(8)):
+            B[i] = T.bitwise_not(i) + T.Cast("int64", T.clz(i))
+
+    @T.function
+    def shifts(A: T.Tensor((T.int64(64),), "float32")):
+        T.func_attr({"global_symbol": "shifts"})
+        for i in range(T.int64(8)):
+            A[T.shift_right(i, T.int64(1)) + T.shift_left(i, T.int64(2))] = T.float32(3)
+        for i in range(T.int64(8)):
+            A[T.bitwise_and(i, T.int64(7)) + T.bitwise_or(i, T.int64(1))] = T.float32(4)
+
+    @T.function
+    def vectors(A: T.Tensor((T.int64(64),), "float32"), C: T.Tensor((T.int64(64),), "float32")):
+        T.func_attr({"global_symbol": "vectors"})
+        for i in range(T.int64(8)):
+            A[T.Ramp(i * T.int64(4), T.int64(1), 4)] = T.Broadcast(T.float32(4), 4)
+            A[T.Broadcast(i, 4)] = T.Broadcast(T.float32(5), 4)
+            C[i] = T.pow(C[i], T.float32(2))
+        for i in range(T.int64(16)):
+            A[i] = A[T.Shuffle([T.Ramp(i, T.int64(1), 2)], [T.int64(1)])]
+
+    @T.function
+    def extents(
+        A: T.Tensor((T.int64(4096),), "float32"), B: T.Tensor((T.int64(4096),), "int64"), n: T.int64
+    ):
+        T.func_attr({"global_symbol": "extents"})
+        for k in range(T.int64(8)):
+            T.evaluate(0)
+        for m in range(n):
+            A[m] = T.float32(5)
+        for v in range(T.int64(2**33)):
+            B[T.floormod(v, T.int64(4096))] = v
+
+    @T.function
+    def threads(A: T.Tensor((T.int64(2048),), "float32")):
+        T.func_attr({"global_symbol": "threads"})
+        bx = T.launch_thread("blockIdx.x", T.int64(16))
+        tx = T.launch_thread("threadIdx.x", T.int64(128))
+        A[bx * T.int64(128) + tx] = A[tx] + T.float32(1)
+
+    @T.function
+    def small(A: T.Tensor((256,), "float32"), B: T.Tensor((70000,), "float32")):
+        T.func_attr({"global_symbol": "small"})
+        for i in range(16):
+            for j in range(16):
+                A[i * 16 + j] = A[j] * T.float32(2)
+        for u in range(4):
+            T.evaluate(0)
+        for v in range(70000):
+            B[v] = T.float32(1)
+
+    functions = [exprs, shifts, vectors, extents, threads, small]
+    return tvm_tirx.IRModule({f.attrs["global_symbol"]: f for f in functions})
+
+
+@pytest.mark.parametrize("target_bits", [32, 16, 8])
+def test_narrow_datatype_branches(target_bits):
+    native = tvm_tirx.tirx.transform.NarrowDataType(target_bits)(_narrow_datatype_module())
+    rust_pass = tvm_ffi.get_global_func("rust.tirx.transform.NarrowDataType")(target_bits)
+    rust = rust_pass(_narrow_datatype_module())
+    assert not tvm_ffi.structural_equal(native, _narrow_datatype_module(), map_free_vars=True)
+    assert tvm_ffi.structural_equal(native, rust, map_free_vars=True)
+
+
+def _force_narrow_module():
+    """ForceNarrowIndexToInt32 branches: casts of launched threads, scalar parameters, Select and
+    if_then_else (with an int64 local scalar on one side), clz, clamped shift amounts (scalar,
+    dynamic and vector), Let, bitwise not, narrow tensors, and a symbolic shape."""
+    from tvm_tirx.script import tirx as T
+
+    n = T.dynamic("n", "int64")
+    x = tvm_tirx.tirx.Var("x", "int64")
+
+    @T.function
+    def threads(A: T.Tensor((T.int64(64),), "float32"), B: T.Tensor((T.int64(64),), "float32")):
+        T.func_attr({"global_symbol": "threads"})
+        bx = T.launch_thread("blockIdx.x", T.int64(2))
+        tx = T.launch_thread("threadIdx.x", T.int64(32))
+        B[T.Cast("int64", bx) * T.int64(32) + T.Cast("int64", tx)] = A[
+            T.Cast("int64", bx) * T.int64(32) + T.Cast("int64", tx)
+        ] + T.float32(1)
+
+    @T.function
+    def exprs(
+        A: T.Tensor((T.int64(16),), "float32"),
+        B: T.Tensor((16,), "float32"),
+        C: T.Tensor((T.int64(4),), "int32"),
+        D: T.Tensor((16,), "int16"),
+        m: T.int64,
+        s: T.int64,
+    ):
+        T.func_attr({"global_symbol": "exprs"})
+        for i in T.serial(T.int64(4)):
+            B[i] = T.Select(T.int64(1) <= i, A[i + m], T.Cast("float32", i))
+            B[i + T.int64(4)] = A[T.if_then_else(m < T.int64(0), m + T.int64(1), m)]
+            C[i] = T.clz(i)
+            B[i + T.int64(8)] = A[
+                T.shift_right(T.truncmod(m - T.int64(8), T.int64(6)), T.int64(63))
+            ]
+            B[T.int64(12)] = A[T.shift_left(T.truncmod(m, T.int64(1)) + i, s)]
+            B[T.Ramp(T.int64(1), T.int64(1), 4)] = A[
+                T.shift_right(
+                    T.Broadcast(T.truncmod(m - T.int64(8), T.int64(6)), 4),
+                    T.Ramp(T.int64(30), T.int64(1), 4),
+                )
+            ]
+            B[T.Let(x + T.int64(1), where={x: i})] = A[T.bitwise_not(i) + T.int64(8)]
+            D[i] = D[i] + T.int16(1)
+
+    @T.function
+    def scalars(A: T.Tensor((T.int64(4),), "float32"), B: T.Tensor((4,), "float32"), m: T.int64):
+        T.func_attr({"global_symbol": "scalars"})
+        opaque_index: T.int64 = T.call_extern("opaque_index", m, ty="int64")
+        B[0] = A[T.if_then_else(m < T.int64(0), opaque_index, m)]
+        B[1] = A[T.Select(m < T.int64(0), m, opaque_index)]
+
+    @T.function
+    def dynamic(Buf: T.Tensor([n], "int32")):
+        T.func_attr({"global_symbol": "dynamic"})
+        ceil_log2: T.int64 = T.Cast("int64", T.ceil(T.log2(T.Cast("float32", n))))
+        for i in T.serial(ceil_log2):
+            Buf[i] = 0
+
+    functions = [threads, exprs, scalars, dynamic]
+    return tvm_tirx.IRModule({f.attrs["global_symbol"]: f for f in functions})
+
+
+def test_force_narrow_index_to_i32_branches():
+    native = tvm_tirx.tirx.transform.ForceNarrowIndexToInt32()(_force_narrow_module())
+    rust_pass = tvm_ffi.get_global_func("rust.tirx.transform.ForceNarrowIndexToInt32")()
+    rust = rust_pass(_force_narrow_module())
+    assert not tvm_ffi.structural_equal(native, _force_narrow_module(), map_free_vars=True)
+    assert tvm_ffi.structural_equal(native, rust, map_free_vars=True)
+
+
+def _force_narrow_rejected():
+    """An int64 tensor parameter, an int64 tensor allocated in the body, and a constant that
+    does not fit in int32."""
+    from tvm_tirx.script import tirx as T
+
+    @T.function
+    def param(A: T.Tensor((16,), "int64")):
+        for i in range(16):
+            A[i] = A[i] + T.int64(1)
+
+    @T.function
+    def internal(A: T.Tensor((16,), "int32")):
+        C = T.alloc_tensor(ty_args=[T.Tensor((16,), "int64")])
+        for i in range(16):
+            C[i] = T.Cast("int64", A[i]) + T.int64(1)
+            A[i] = T.Cast("int32", C[i])
+
+    @T.function
+    def large(A: T.Tensor((16,), "int32")):
+        A[0] = T.Cast("int32", T.int64(2**40))
+
+    return [tvm_tirx.IRModule({"main": f}) for f in (param, internal, large)]
+
+
+def test_force_narrow_index_to_i32_rejects_wide_integers():
+    for factory in (
+        "tirx.transform.ForceNarrowIndexToInt32",
+        "rust.tirx.transform.ForceNarrowIndexToInt32",
+    ):
+        pass_ = tvm_ffi.get_global_func(factory)()
+        for module in _force_narrow_rejected():
+            with pytest.raises(RuntimeError):
+                pass_(module)
