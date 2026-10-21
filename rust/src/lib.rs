@@ -72,8 +72,11 @@
 //! as given, without the checks, defaults or derived fields of the native constructor. Where the
 //! native constructor does more than that (`ir::prim::Add` checks its operand types,
 //! `tirx::Function` derives its type from the signature), `new` is reserved for a constructor with
-//! those semantics, and the allocation of the fields as given is `from_complete_fields`. To build
-//! a node with the native semantics, call the native constructor through its global function.
+//! those semantics, and the allocation of the fields as given is `from_complete_fields`. The IR
+//! constructors are written in Rust after the C++ ones, with the same checks, defaults, derived
+//! fields and errors; they call into C++ only for the nodes C++ shares (`UnknownLoc`,
+//! `MissingType` and the `PrimType` of each dtype, fetched once per thread), for the hooks an
+//! operator or type registers (such as `FInferType`), and for printing in an error message.
 //!
 //! # Generated and hand-written code
 //!

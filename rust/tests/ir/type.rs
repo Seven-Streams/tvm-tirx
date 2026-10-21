@@ -19,10 +19,13 @@
 
 //! Tests of `ir::type`.
 
-use tvm_tirx::ir::{FuncType, MissingType, NoneType, PrimType, PtrType, TensorRegionType, TupleType};
+use tvm_tirx::ir::{
+    FuncType, MissingType, NoneType, PrimType, PtrType, TensorRegionType, TupleType, Type,
+};
+use tvm_tirx::tvm_ffi::{Array, ObjectRefCore};
 
 use super::{dtype, loc, scope};
-use crate::common::{serial, structural_equal};
+use crate::common::{agree, native, serial, structural_equal};
 
 #[test]
 fn types() {
@@ -38,4 +41,31 @@ fn types() {
     assert_eq!(tuple.fields.len(), 2);
     let func = FuncType::new([&i32_ty], &i32_ty).unwrap();
     assert_eq!(func.arg_types.len(), 1);
+}
+
+#[test]
+fn types_agree_with_cpp() {
+    let _serial = serial();
+    let int32: Type = PrimType::from_dtype(dtype("int32")).unwrap().into();
+    let float32: Type = PrimType::from_dtype(dtype("float32")).unwrap().into();
+    let missing: Type = MissingType::new().unwrap().into();
+    for (what, element) in [("PtrType", &int32), ("PtrType(missing)", &missing)] {
+        let native_ptr = native("ir.PtrType", &[element.into(), (&scope()).into()]);
+        agree(what, PtrType::new(element, &scope()), native_ptr);
+    }
+    for (what, fields) in
+        [("TupleType", vec![int32.clone(), float32.clone()]), ("TupleType(empty)", vec![])]
+    {
+        let array: Array<Type> = fields.iter().cloned().collect();
+        let native_tuple = native("ir.TupleType", &[(&array).into(), (&loc()).into()]);
+        agree(what, TupleType::new(fields, loc()), native_tuple);
+    }
+    let args: Array<Type> = [int32.clone()].into_iter().collect();
+    let native_func = native("ir.FuncType", &[(&args).into(), (&float32).into()]);
+    agree("FuncType", FuncType::new([&int32], &float32), native_func);
+
+    let none: Type = native("ir.NoneType", &[]).unwrap().try_into().unwrap();
+    assert!(NoneType::instance().unwrap().same_as(&none));
+    let region: Type = native("ir.TensorRegionType", &[]).unwrap().try_into().unwrap();
+    assert!(TensorRegionType::instance().unwrap().same_as(&region));
 }

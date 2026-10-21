@@ -22,7 +22,8 @@
 //!
 //! The objects `python/tvm_tirx/ir/module.py` defines. An [`IRModule`] maps global variables to
 //! functions, and holds the module attributes, the module-level information and the names of its
-//! global variables. Its methods wrap the native `ir.IRModule*` functions.
+//! global variables. [`IRModule::from_functions`] is written in Rust after the C++ constructor;
+//! the other methods wrap the native `ir.IRModule*` functions.
 
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
@@ -30,6 +31,7 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::RValueRef
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
@@ -37,6 +39,7 @@ use crate::ir::expr::Expr;
 use crate::ir::expr::GlobalVar;
 use crate::ir::function::BaseFunc;
 use crate::ir::global_info::GlobalInfo;
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
@@ -107,16 +110,31 @@ impl IRModule {
 // tvm-ffi-stubgen(end)
 
 impl IRModule {
-    /// The module of `functions`, with the attributes `attrs` (none if `None`) and the
-    /// module-level information `global_infos`; it indexes the functions by name (`ir.IRModule`).
+    /// The module of `functions`, with the attributes `attrs` (empty if `None`) and the
+    /// module-level information `global_infos`; it indexes the functions by name, which must be
+    /// distinct (C++ `IRModule(functions, attrs, global_infos)`).
     pub fn from_functions(
         functions: &Map<GlobalVar, BaseFunc>,
         attrs: Option<&DictAttrs>,
         global_infos: &Map<String, Array<GlobalInfo>>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.IRModule")
-            .call_tuple((functions, attrs.cloned(), global_infos))?
-            .try_into()
+        let attrs = match attrs {
+            Some(attrs) => attrs.clone(),
+            None => DictAttrs::new(Map::new()),
+        };
+        let mut names = std::collections::HashSet::new();
+        let mut global_var_map = Vec::with_capacity(functions.len());
+        for (var, _) in functions.iter() {
+            let name = var.name_hint.clone();
+            if !names.insert(name.as_str().to_string()) {
+                let condition = "n->global_var_map_.count(kv.first->name_hint) == 0";
+                let message = format!("Duplicate global function name {}", name.as_str());
+                return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, &message));
+            }
+            global_var_map.push((name, var));
+        }
+        let global_var_map = global_var_map.into_iter().collect::<Map<String, GlobalVar>>();
+        Ok(Self::new(functions.clone(), attrs, global_infos.clone(), global_var_map))
     }
 
     /// The module of `functions` and `expr`, a function bound to its global symbol or to `main`

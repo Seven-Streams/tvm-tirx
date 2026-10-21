@@ -35,10 +35,12 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 // tvm-ffi-stubgen(import-object): crate::ir::location::Location
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
+// tvm-ffi-stubgen(import-object): crate::ir::prim::expr::BitwiseNot
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::location::Location;
+use crate::ir::prim::expr::BitwiseNot;
 use crate::ir::r#type::PrimType;
 use tvm_ffi::Any;
 use tvm_ffi::Error;
@@ -248,9 +250,9 @@ pub fn shift_right(
 }
 
 /// The node `~x`, which, unlike the other operators, neither promotes nor folds
-/// (`prim.BitwiseNot`).
+/// ([`BitwiseNot::new`]).
 pub fn bitwise_not(x: impl Into<Expr>, loc: impl Into<Location>) -> Result<Expr> {
-    tvm_ffi::cached_global_func!("prim.BitwiseNot").call_tuple((&x.into(), &loc.into()))?.try_into()
+    Ok(BitwiseNot::new(x, loc)?.into())
 }
 
 /// The conjunction of `conds`, which must not be empty (`prim._OpAnd`).

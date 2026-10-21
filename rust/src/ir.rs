@@ -40,6 +40,7 @@ pub mod module;
 pub mod op;
 pub mod prim;
 pub mod stmt;
+pub(crate) mod support;
 pub mod transform;
 pub mod r#type;
 pub mod unique_name_supply;

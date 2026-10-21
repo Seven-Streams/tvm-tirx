@@ -19,10 +19,12 @@
 
 //! Tests of `tirx::tensor`: tensor types.
 
+use tvm_tirx::ir::{Expr, StringImm};
 use tvm_tirx::tirx::{tensor_is_scalar, Layout, TensorType};
+use tvm_tirx::tvm_ffi::Array;
 
 use super::{int32, loc, memory_scope, prim_type, tile_8x8, var};
-use crate::common::serial;
+use crate::common::{agree, agree_kind, native, serial};
 
 #[test]
 fn tensor_types() {
@@ -44,4 +46,49 @@ fn tensor_types() {
     assert!(laid_out.has_default_layout(None).unwrap());
     assert!(tensor_is_scalar(var("A", &ty), true).unwrap());
     assert!(!tensor_is_scalar(var("B", &laid_out), true).unwrap());
+}
+
+#[test]
+fn tensor_types_agree_with_cpp() {
+    let _serial = serial();
+    let scope = memory_scope();
+    let float32 = prim_type("float32");
+    let layout: Layout = tile_8x8().into();
+    let text: Expr = StringImm::new("s", loc()).unwrap().into();
+    let cases: Vec<(&str, Vec<Expr>, i32, Option<Layout>)> = vec![
+        ("TensorType(default alignment)", vec![int32(1)], 0, None),
+        ("TensorType(negative alignment)", vec![int32(4), int32(4)], -8, None),
+        ("TensorType(alignment)", vec![int32(8), int32(8)], 128, Some(layout)),
+    ];
+    for (what, shape, alignment, layout) in cases {
+        let array: Array<Expr> = shape.iter().cloned().collect();
+        let native_type = native(
+            "tirx.TensorType",
+            &[
+                (&array).into(),
+                (&float32).into(),
+                (&scope).into(),
+                (&alignment).into(),
+                (&layout).into(),
+                (&loc()).into(),
+            ],
+        );
+        let rust = TensorType::new(shape, &float32, &scope, alignment, layout.as_ref(), loc());
+        agree(what, rust, native_type);
+    }
+    let array: Array<Expr> = [text.clone()].into_iter().collect();
+    let (alignment, layout) = (0i32, Option::<Layout>::None);
+    let native_type = native(
+        "tirx.TensorType",
+        &[
+            (&array).into(),
+            (&float32).into(),
+            (&scope).into(),
+            (&alignment).into(),
+            (&layout).into(),
+            (&loc()).into(),
+        ],
+    );
+    let rust = TensorType::new([text], &float32, &scope, 0, None, loc());
+    agree_kind("TensorType(shape)", rust, native_type);
 }

@@ -191,6 +191,11 @@ impl Op {
     pub fn attr_map<T: tvm_ffi::type_traits::AnyCompatible>(
         name: &str,
     ) -> Result<Option<OpAttrMap<T>>> {
+        Self::attr_column(name)
+    }
+
+    /// [`Op::attr_map`] for a column read entry by entry as raw values ([`OpAttrMap::get_any`]).
+    pub(crate) fn attr_column<T>(name: &str) -> Result<Option<OpAttrMap<T>>> {
         let column =
             tvm_ffi::cached_global_func!("ir.GetOpAttrColumn").call_tuple((String::from(name),))?;
         if column.type_index() == tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex::kTVMFFINone as i32 {
@@ -253,9 +258,9 @@ struct SeqCell {
     data_deleter: Option<unsafe extern "C" fn(*mut core::ffi::c_void)>,
 }
 
-impl<T: tvm_ffi::type_traits::AnyCompatible> OpAttrMap<T> {
-    /// `OpAttrMap::get(op, None)`: the value registered for `op`, if any.
-    pub fn get(&self, op: &OpObj) -> Result<Option<T>> {
+impl<T> OpAttrMap<T> {
+    /// The entry of `op` in the column, unless it has none.
+    fn entry(&self, op: &OpObj) -> Option<&tvm_ffi::tvm_ffi_sys::TVMFFIAny> {
         // SAFETY: `column` is an `ffi.List` (checked by `Op::attr_map`) that `self` keeps alive.
         // The cell is read on every lookup because growth may move the element buffer.
         let cell = unsafe {
@@ -264,13 +269,28 @@ impl<T: tvm_ffi::type_traits::AnyCompatible> OpAttrMap<T> {
         };
         let index = op.index as usize;
         if index >= cell.size as usize {
-            return Ok(None);
+            return None;
         }
         // SAFETY: `index` is within the `size` initialized entries.
         let entry = unsafe { &*cell.data.add(index) };
-        if entry.type_index == tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex::kTVMFFINone as i32 {
-            return Ok(None);
-        }
+        (entry.type_index != tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex::kTVMFFINone as i32)
+            .then_some(entry)
+    }
+
+    /// The value `op` registers in this column, of whatever type, or `None`.
+    pub(crate) fn get_any(&self, op: &OpObj) -> Option<Any> {
+        self.entry(op).map(|entry| {
+            // SAFETY: the borrowed entry is copied, never released.
+            let entry = std::mem::ManuallyDrop::new(unsafe { Any::from_raw_ffi_any(*entry) });
+            (*entry).clone()
+        })
+    }
+}
+
+impl<T: tvm_ffi::type_traits::AnyCompatible> OpAttrMap<T> {
+    /// `OpAttrMap::get(op, None)`: the value registered for `op`, if any.
+    pub fn get(&self, op: &OpObj) -> Result<Option<T>> {
+        let Some(entry) = self.entry(op) else { return Ok(None) };
         // SAFETY: `entry` is a live element of the column.
         match unsafe { T::try_cast_from_any_view(entry) } {
             Ok(value) => Ok(Some(value)),

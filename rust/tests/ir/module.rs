@@ -19,11 +19,11 @@
 
 //! Tests of `ir::module`.
 
-use tvm_tirx::ir::{BaseFunc, Expr, GlobalInfo, GlobalVar, IRModule};
-use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
+use tvm_tirx::ir::{BaseFunc, DictAttrs, Expr, GlobalInfo, GlobalVar, IRModule};
+use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
 
 use super::{function, int32, loc};
-use crate::common::{serial, structural_equal};
+use crate::common::{agree, native, serial, structural_equal};
 
 #[test]
 fn modules() {
@@ -75,4 +75,41 @@ fn modules() {
 
     let from_expr = IRModule::from_expr(function(5), &Map::new()).unwrap();
     assert!(from_expr.contains("main").unwrap());
+}
+
+/// An `IRModule` case: its name, functions and attributes.
+type ModuleCase<'a> = (&'a str, Vec<(GlobalVar, BaseFunc)>, Option<&'a DictAttrs>);
+
+#[test]
+fn modules_agree_with_cpp() {
+    let _serial = serial();
+    let (main, other) =
+        (GlobalVar::new("main", loc()).unwrap(), GlobalVar::new("other", loc()).unwrap());
+    let twin = GlobalVar::new("main", loc()).unwrap();
+    let note: Map<FfiString, Any> =
+        [(FfiString::from("note"), Any::from(1i64))].into_iter().collect();
+    let attrs = DictAttrs::new(note);
+    let infos: Map<FfiString, Array<GlobalInfo>> =
+        [(FfiString::from("info"), Array::new(vec![]))].into_iter().collect();
+    let cases: Vec<ModuleCase> = vec![
+        ("IRModule", vec![(main.clone(), function(0)), (other.clone(), function(1))], None),
+        ("IRModule(attrs)", vec![(main.clone(), function(0))], Some(&attrs)),
+        ("IRModule(empty)", vec![], None),
+        ("IRModule(duplicate names)", vec![(main.clone(), function(0)), (twin, function(1))], None),
+    ];
+    for (what, functions, attrs) in cases {
+        let functions: Map<GlobalVar, BaseFunc> = functions.into_iter().collect();
+        let attrs_arg = attrs.cloned();
+        let native_module =
+            native("ir.IRModule", &[(&functions).into(), (&attrs_arg).into(), (&infos).into()]);
+        let rust = IRModule::from_functions(&functions, attrs, &infos);
+        if let (Ok(rust), Ok(native_module)) = (&rust, &native_module) {
+            let native_module: IRModule = native_module.clone().try_into().unwrap();
+            assert!(
+                structural_equal(&rust.global_var_map, &native_module.global_var_map),
+                "{what}"
+            );
+        }
+        agree(what, rust, native_module);
+    }
 }

@@ -24,13 +24,18 @@
 //! [`BaseFunc`] with parameters, a return type and an optional body, built with [`Function::new`];
 //! [`renew_def`] gives its variables fresh definitions.
 
-// `custom-new` reserves `new` for a constructor with the native one's semantics (`ty` derived from
-// the signature); the generated `from_complete_fields` allocates the fields as given.
+// `custom-new` reserves `new` for a constructor with the C++ one's semantics (`ty` derived from the
+// signature); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): tirx.Function
 
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::FuncType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::MissingTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::TupleType
+// tvm-ffi-stubgen(import-object): crate::ir::location::UnknownLoc
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
@@ -39,11 +44,16 @@ use crate::ir::expr::Var;
 use crate::ir::function::BaseFunc;
 use crate::ir::function::BaseFuncObj;
 use crate::ir::location::Location;
+use crate::ir::location::UnknownLoc;
+use crate::ir::r#type::FuncType;
+use crate::ir::r#type::MissingTypeObj;
+use crate::ir::r#type::TupleType;
 use crate::ir::r#type::Type;
 use crate::ir::stmt::SeqStmt;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
@@ -118,8 +128,9 @@ tvm_ffi::impl_object_upcast!(Function => Expr, Function => BaseFunc);
 // tvm-ffi-stubgen(end)
 
 impl Function {
-    /// The function of `params`, `body`, `ret_type` and `attrs`, its type derived from the
-    /// signature; a missing return type becomes void (`tirx.Function`).
+    /// The function of `params`, `body`, `ret_type` and `attrs`, of the function type from the
+    /// types of `params` to `ret_type`; a missing return type becomes void, the empty tuple type
+    /// (C++ `Function(params, body, ret_type, attrs, loc)`).
     pub fn new(
         params: impl IntoIterator<Item = impl Into<Var>>,
         body: Option<&SeqStmt>,
@@ -128,10 +139,21 @@ impl Function {
         loc: impl Into<Location>,
     ) -> Result<Self> {
         let params = params.into_iter().map(Into::into).collect::<Array<Var>>();
-        let (ret_type, attrs, loc) = (ret_type.into(), attrs.into(), loc.into());
-        tvm_ffi::cached_global_func!("tirx.Function")
-            .call_tuple((&params, body.cloned(), &ret_type, &attrs, &loc))?
-            .try_into()
+        let ret_type: Type = ret_type.into();
+        let ret_type = match ret_type.as_node::<MissingTypeObj>() {
+            Some(_) => TupleType::new(Vec::<Type>::new(), UnknownLoc::new()?)?.into(),
+            None => ret_type,
+        };
+        let param_types = params.iter().map(|param| param.ty.clone()).collect::<Vec<Type>>();
+        let ty = FuncType::new(param_types, ret_type.clone())?;
+        Ok(Self::from_complete_fields(
+            loc.into(),
+            ty.into(),
+            attrs.into(),
+            params,
+            ret_type,
+            body.cloned(),
+        ))
     }
 }
 

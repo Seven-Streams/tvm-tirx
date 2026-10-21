@@ -30,8 +30,10 @@
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -188,9 +190,15 @@ tvm_ffi::impl_object_upcast!(UnknownLoc => Location);
 // tvm-ffi-stubgen(end)
 
 impl UnknownLoc {
-    /// The shared unknown location (`ir.UnknownLoc`), which IR constructors default to.
+    /// The shared unknown location (`ir.UnknownLoc`), which IR constructors default to, fetched
+    /// once per thread.
     pub fn new() -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.UnknownLoc").call_tuple(())?.try_into()
+        thread_local! {
+            static UNKNOWN_LOC: std::cell::OnceCell<UnknownLoc> = const { std::cell::OnceCell::new() };
+        }
+        support::shared(&UNKNOWN_LOC, || {
+            tvm_ffi::cached_global_func!("ir.UnknownLoc").call_tuple(())?.try_into()
+        })
     }
 }
 
