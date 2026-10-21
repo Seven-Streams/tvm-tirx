@@ -19,17 +19,17 @@
 
 //! Tests of `tirx::index_map`.
 
-use tvm_tirx::ir::{dtype, Expr};
+use tvm_tirx::ir::{dtype, Expr, PrimType};
 use tvm_tirx::tirx::IndexMap;
 use tvm_tirx::tvm_ffi::{Array, DLDevice, DLDeviceType};
 
-use super::{as_i64, int32, op, prim_type, range, var};
+use super::{as_i64, int32, op, range, var};
 use crate::common::{serial, structural_equal};
 
 #[test]
 fn index_maps() {
     let _serial = serial();
-    let (i, j) = (var("i", prim_type("int32")), var("j", prim_type("int32")));
+    let (i, j) = (var("i", PrimType::int(32)), var("j", PrimType::int(32)));
     let transpose = IndexMap::new(
         Array::new(vec![i.clone(), j.clone()]),
         Array::new(vec![Expr::from(&j), Expr::from(&i)]),
@@ -42,7 +42,7 @@ fn index_maps() {
     let inverse = transpose.inverse([range(4), range(8)], None).unwrap();
     assert_eq!(inverse.final_indices.len(), 2);
 
-    let k = var("k", prim_type("int32"));
+    let k = var("k", PrimType::int(32));
     let split = IndexMap::new(
         Array::new(vec![k.clone()]),
         Array::new(vec![

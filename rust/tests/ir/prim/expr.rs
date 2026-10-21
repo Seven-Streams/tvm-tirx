@@ -20,23 +20,23 @@
 //! Tests of `ir::prim::expr`.
 
 use tvm_tirx::ir::prim;
-use tvm_tirx::ir::{Expr, StringImm, Type, Var};
+use tvm_tirx::ir::{Expr, PrimType, StringImm, Type, Var};
 use tvm_tirx::tvm_ffi::{Any, AnyView, Result};
 
-use super::{dtype, float, int, ty, var};
+use super::{dtype, var};
 use crate::common::{agree, agree_kind, native, serial, structural_equal};
 use crate::loc;
 
 #[test]
 fn node_constructors() {
     let _serial = serial();
-    let (x, y) = (var("x", "int32"), var("y", "int32"));
-    let (p, q) = (var("p", "bool"), var("q", "bool"));
+    let (x, y) = (var("x", PrimType::int(32)), var("y", PrimType::int(32)));
+    let (p, q) = (var("p", PrimType::bool()), var("q", PrimType::bool()));
 
     let add = prim::Add::new(&x, &y, loc()).unwrap();
     assert!(structural_equal(&add.a, &Expr::from(&x)));
     assert_eq!(dtype(&add.clone().into()), "int32");
-    assert!(prim::Add::new(&x, float("float32", 1.0), loc()).is_err(), "no type promotion");
+    assert!(prim::Add::new(&x, 1.0f32, loc()).is_err(), "no type promotion");
 
     let binary: Vec<Expr> = vec![
         prim::Sub::new(&x, &y, loc()).unwrap().into(),
@@ -72,11 +72,11 @@ fn node_constructors() {
         assert_eq!(dtype(expr), "bool");
     }
 
-    let cast = prim::Cast::new(ty("float32"), &x, loc()).unwrap();
+    let cast = prim::Cast::new(PrimType::float(32), &x, loc()).unwrap();
     assert_eq!(dtype(&cast.into()), "float32");
     let select = prim::Select::new(&p, &x, &y, loc()).unwrap();
     assert!(structural_equal(&select.true_value, &Expr::from(&x)));
-    let let_ = prim::Let::new(&x, int("int32", 1), &add, loc()).unwrap();
+    let let_ = prim::Let::new(&x, 1, &add, loc()).unwrap();
     assert!(structural_equal(&let_.var, &x));
 }
 
@@ -91,11 +91,14 @@ fn native_with_loc(name: &str, args: &[&Expr]) -> Result<Any> {
 #[test]
 fn binary_nodes_agree_with_cpp() {
     let _serial = serial();
-    let (x, y) = (Expr::from(var("x", "int32")), Expr::from(var("y", "int32")));
-    let (u, v4) = (Expr::from(var("u", "uint8")), Expr::from(var("v", "int32x4")));
-    let (p, q) = (Expr::from(var("p", "bool")), Expr::from(var("q", "bool")));
-    let p4 = Expr::from(var("p4", "boolx4"));
-    let f = Expr::from(var("f", "float32"));
+    let (x, y) = (Expr::from(var("x", PrimType::int(32))), Expr::from(var("y", PrimType::int(32))));
+    let (u, v4) = (
+        Expr::from(var("u", PrimType::uint(8))),
+        Expr::from(var("v", PrimType::int(32).with_lanes(4))),
+    );
+    let (p, q) = (Expr::from(var("p", PrimType::bool())), Expr::from(var("q", PrimType::bool())));
+    let p4 = Expr::from(var("p4", PrimType::bool().with_lanes(4)));
+    let f = Expr::from(var("f", PrimType::float(32)));
     let text: Expr = StringImm::new("s", loc()).unwrap().into();
     let operands: Vec<(&str, &Expr, &Expr)> = vec![
         ("int32", &x, &y),
@@ -151,15 +154,21 @@ fn binary_nodes_agree_with_cpp() {
 #[test]
 fn other_nodes_agree_with_cpp() {
     let _serial = serial();
-    let (x, y) = (Expr::from(var("x", "int32")), Expr::from(var("y", "int32")));
-    let (p, p4) = (Expr::from(var("p", "bool")), Expr::from(var("p4", "boolx4")));
-    let (v4, w4) = (Expr::from(var("v", "int32x4")), Expr::from(var("w", "int32x4")));
-    let f = Expr::from(var("f", "float32"));
+    let (x, y) = (Expr::from(var("x", PrimType::int(32))), Expr::from(var("y", PrimType::int(32))));
+    let (p, p4) = (
+        Expr::from(var("p", PrimType::bool())),
+        Expr::from(var("p4", PrimType::bool().with_lanes(4))),
+    );
+    let (v4, w4) = (
+        Expr::from(var("v", PrimType::int(32).with_lanes(4))),
+        Expr::from(var("w", PrimType::int(32).with_lanes(4))),
+    );
+    let f = Expr::from(var("f", PrimType::float(32)));
 
     for (what, target, value) in [
-        ("Cast(int32 to float32)", ty("float32"), &x),
-        ("Cast(int32x4 to float32x4)", ty("float32x4"), &v4),
-        ("Cast(int32 to float32x4)", ty("float32x4"), &x),
+        ("Cast(int32 to float32)", PrimType::float(32), &x),
+        ("Cast(int32x4 to float32x4)", PrimType::float(32).with_lanes(4), &v4),
+        ("Cast(int32 to float32x4)", PrimType::float(32).with_lanes(4), &x),
     ] {
         let target_ty: Type = target.clone().into();
         let native_cast =
@@ -179,8 +188,8 @@ fn other_nodes_agree_with_cpp() {
         agree(what, prim::Select::new(condition, t, f_, loc()), native_select);
     }
 
-    let z = var("z", "int32");
-    let tensor_ty: Type = ty("float32").into();
+    let z = var("z", PrimType::int(32));
+    let tensor_ty: Type = PrimType::float(32).into();
     let tensor = Var::new("t", Some(&tensor_ty), loc()).unwrap();
     let missing = Var::new("m", None, loc()).unwrap();
     for (what, var, value) in [

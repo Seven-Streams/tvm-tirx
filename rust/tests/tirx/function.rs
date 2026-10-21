@@ -19,17 +19,17 @@
 
 //! Tests of `tirx::function`.
 
-use tvm_tirx::ir::{DictAttrs, MissingType, Return, SeqStmt, Type, Var};
+use tvm_tirx::ir::{DictAttrs, MissingType, PrimType, Return, SeqStmt, Type, Var};
 use tvm_tirx::tirx::{renew_def, Function};
 use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
 
-use super::{loc, prim_type, var, void_function};
+use super::{loc, var, void_function};
 use crate::common::{agree, native, serial, structural_equal};
 
 #[test]
 fn functions() {
     let _serial = serial();
-    let x = var("x", prim_type("int32"));
+    let x = var("x", PrimType::int(32));
     let func = void_function(vec![x.clone()]);
     assert_eq!(func.params.len(), 1);
     let renewed = renew_def(&func).unwrap();
@@ -41,10 +41,10 @@ fn functions() {
 #[test]
 fn functions_agree_with_cpp() {
     let _serial = serial();
-    let x = var("x", prim_type("int32"));
+    let x = var("x", PrimType::int(32));
     let params: Array<Var> = [x.clone()].into_iter().collect();
     let body = SeqStmt::new([Return::new(&x, loc()).unwrap()], None).unwrap();
-    let int32: Type = prim_type("int32").into();
+    let int32: Type = PrimType::int(32).into();
     let missing: Type = MissingType::new().unwrap().into();
     let note: Map<FfiString, Any> =
         [(FfiString::from("note"), Any::from(1i64))].into_iter().collect();

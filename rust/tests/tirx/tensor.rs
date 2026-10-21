@@ -19,24 +19,24 @@
 
 //! Tests of `tirx::tensor`: tensor types.
 
-use tvm_tirx::ir::{Expr, StringImm};
+use tvm_tirx::ir::{Expr, PrimType, StringImm};
 use tvm_tirx::tirx::{tensor_is_scalar, Layout, TensorType};
 use tvm_tirx::tvm_ffi::Array;
 
-use super::{int32, loc, memory_scope, prim_type, tile_8x8, var};
+use super::{int32, loc, memory_scope, tile_8x8, var};
 use crate::common::{agree, agree_kind, native, serial};
 
 #[test]
 fn tensor_types() {
     let _serial = serial();
     let scope = memory_scope();
-    let ty = TensorType::new([int32(1)], prim_type("float32"), &scope, 0, None, loc()).unwrap();
+    let ty = TensorType::new([int32(1)], PrimType::float(32), &scope, 0, None, loc()).unwrap();
     assert_eq!(ty.data_alignment, 64);
     assert!(ty.has_default_layout(None).unwrap());
     let tile = tile_8x8();
     let laid_out = TensorType::new(
         [int32(8), int32(8)],
-        prim_type("float32"),
+        PrimType::float(32),
         &scope,
         16,
         Some(&Layout::from(&tile)),
@@ -52,7 +52,7 @@ fn tensor_types() {
 fn tensor_types_agree_with_cpp() {
     let _serial = serial();
     let scope = memory_scope();
-    let float32 = prim_type("float32");
+    let float32 = PrimType::float(32);
     let layout: Layout = tile_8x8().into();
     let text: Expr = StringImm::new("s", loc()).unwrap().into();
     let cases: Vec<(&str, Vec<Expr>, i32, Option<Layout>)> = vec![

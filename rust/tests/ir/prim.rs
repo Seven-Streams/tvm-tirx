@@ -25,42 +25,18 @@ mod op;
 mod vector_expr;
 
 use tvm_tirx::ir::prim;
-use tvm_tirx::ir::{Expr, FloatImm, IntImm, PrimType, Var};
-use tvm_tirx::tvm_ffi::{BigInt, DLDataType, DLDataTypeExt, ObjectRefCast, String as FfiString};
+use tvm_tirx::ir::{Expr, IntImm, PrimType, Var};
+use tvm_tirx::tvm_ffi::{DLDataTypeExt, ObjectRefCast};
 
 use super::loc;
-use crate::common::{global, serial};
+use crate::common::serial;
 
-fn ty(dtype: &str) -> PrimType {
-    PrimType::from_dtype(DLDataType::try_from_str(dtype).unwrap()).unwrap()
+/// A variable of the primitive type `ty`.
+fn var(name: &str, ty: PrimType) -> Var {
+    Var::new(name, Some(&ty.into()), loc()).unwrap()
 }
 
-fn int(dtype: &str, value: i64) -> Expr {
-    let imm: IntImm = global("ir.IntImm")
-        .call_tuple((DLDataType::try_from_str(dtype).unwrap(), BigInt::from(value), loc()))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    imm.into()
-}
-
-fn float(dtype: &str, value: f64) -> Expr {
-    let imm: FloatImm = global("ir.FloatImm")
-        .call_tuple((DLDataType::try_from_str(dtype).unwrap(), value, loc()))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    imm.into()
-}
-
-fn var(name: &str, dtype: &str) -> Var {
-    global("ir.Var")
-        .call_tuple((FfiString::from(name), ty(dtype), loc()))
-        .unwrap()
-        .try_into()
-        .unwrap()
-}
-
+/// The dtype of a primitive expression, by name.
 fn dtype(expr: &Expr) -> String {
     let ty: PrimType = expr.ty.clone().try_cast().unwrap();
     ty.dtype.to_string().as_str().to_owned()
@@ -74,9 +50,9 @@ fn int_value(expr: Expr) -> i64 {
 #[test]
 fn expr_deep_equal() {
     let _serial = serial();
-    let x = var("x", "int32");
-    let a = prim::op::add(&x, int("int32", 1), loc()).unwrap();
-    let b = prim::op::add(&x, int("int32", 1), loc()).unwrap();
+    let x = var("x", PrimType::int(32));
+    let a = prim::op::add(&x, 1, loc()).unwrap();
+    let b = prim::op::add(&x, 1, loc()).unwrap();
     assert!(prim::expr_deep_equal(&a, &b).unwrap());
-    assert!(!prim::expr_deep_equal(&a, var("x", "int32")).unwrap());
+    assert!(!prim::expr_deep_equal(&a, var("x", PrimType::int(32))).unwrap());
 }

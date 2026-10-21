@@ -27,28 +27,18 @@ mod analyzer;
 mod int_set;
 mod iter_affine_map;
 
-use tvm_tirx::ir::{Expr, IntImm, Location, PrimType, Range, Var};
+use tvm_tirx::ir::{dtype, Expr, IntImm, Location, PrimType, Range, Var};
 use tvm_tirx::sym::Analyzer;
-use tvm_tirx::tvm_ffi::{BigInt, DLDataType, DLDataTypeExt, String as FfiString};
+use tvm_tirx::tvm_ffi::String as FfiString;
 
 use common::global;
 
 fn loc() -> Location {
-    global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap()
-}
-
-fn imm(dtype: &str, value: i64) -> Expr {
-    let dtype = DLDataType::try_from_str(dtype).unwrap();
-    let imm: IntImm = global("ir.IntImm")
-        .call_tuple((dtype, BigInt::from(value), loc()))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    imm.into()
+    Location::unknown().unwrap()
 }
 
 fn int32(value: i64) -> Expr {
-    imm("int32", value)
+    IntImm::from_dtype(dtype::int(32), value, loc()).unwrap().into()
 }
 
 fn op(name: &str, a: impl Into<Expr>, b: impl Into<Expr>) -> Expr {

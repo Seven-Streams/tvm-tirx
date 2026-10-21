@@ -521,6 +521,12 @@ impl PrimType {
     pub fn with_lanes(&self, lanes: u16) -> Self {
         Self::builtin(dtype::with_lanes(self.dtype, lanes))
     }
+
+    /// The scalable vector of `factor` times `vscale` elements of this scalar type, with the C++
+    /// checks of the factor (C++ `PrimType::ScalableVector(code, bits, factor)`).
+    pub fn with_scalable_lanes(&self, factor: u16) -> Result<Self> {
+        Self::from_dtype(support::scalable_vector(self.dtype, i32::from(factor))?)
+    }
 }
 
 // tvm-ffi-stubgen(begin): object/ir.StringType

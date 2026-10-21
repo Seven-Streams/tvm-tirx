@@ -22,7 +22,7 @@
 use tvm_tirx::ir::*;
 use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
 
-use super::{int32, int32_var, loc, op, parse_dtype, seq, tensor_var};
+use super::{int32, int32_var, loc, op, seq, tensor_var};
 use crate::common::{agree, native, serial, structural_equal};
 
 #[test]
@@ -80,14 +80,9 @@ fn statements() {
     assert_eq!(region.body.seq.len(), 1);
 }
 
-/// A variable of the primitive type `dtype`.
-fn prim_var(name: &str, dtype_name: &str) -> Var {
-    let ty: Type = PrimType::from_dtype(parse_dtype(dtype_name)).unwrap().into();
-    Var::new(name, Some(&ty), loc()).unwrap()
-}
-
-fn int_imm(dtype_name: &str, value: i64) -> Expr {
-    IntImm::from_dtype(parse_dtype(dtype_name), value, loc()).unwrap().into()
+/// A variable of the primitive type `ty`.
+fn prim_var(name: &str, ty: PrimType) -> Var {
+    Var::new(name, Some(&ty.into()), loc()).unwrap()
 }
 
 /// A `For` case: its name, variable, begin, end, step, body and annotations.
@@ -99,8 +94,8 @@ type RegionCase<'a> = (&'a str, &'a Op, Vec<Expr>, Vec<Var>, &'a DictAttrs, Vec<
 #[test]
 fn statements_agree_with_cpp() {
     let _serial = serial();
-    let (x, y) = (prim_var("x", "int32"), prim_var("y", "int32"));
-    let (f, p) = (prim_var("f", "float32"), prim_var("p", "bool"));
+    let (x, y) = (prim_var("x", PrimType::int(32)), prim_var("y", PrimType::int(32)));
+    let (f, p) = (prim_var("f", PrimType::float(32)), prim_var("p", PrimType::bool()));
     let evaluate: Stmt = Evaluate::new(&x, loc()).unwrap().into();
     let no_op: Stmt = Evaluate::new(int32(0), loc()).unwrap().into();
 
@@ -121,7 +116,7 @@ fn statements_agree_with_cpp() {
         agree(what, AssertStmt::new(&condition, &kind, parts.iter(), loc()), native_assert);
     }
 
-    let (i, i64_var) = (prim_var("i", "int32"), prim_var("j", "int64"));
+    let (i, i64_var) = (prim_var("i", PrimType::int(32)), prim_var("j", PrimType::int(64)));
     let note: Map<FfiString, Any> =
         [(FfiString::from("note"), Any::from(1i64))].into_iter().collect();
     let body_seq: Stmt = SeqStmt::new([evaluate.clone(), evaluate.clone()], None).unwrap().into();
@@ -141,8 +136,8 @@ fn statements_agree_with_cpp() {
         (
             "For(int64 bound literal)",
             &i,
-            int_imm("int64", 0),
-            int_imm("int64", 8),
+            IntImm::int64(0).into(),
+            IntImm::int64(8).into(),
             int32(1),
             evaluate.clone(),
             None,
@@ -151,21 +146,29 @@ fn statements_agree_with_cpp() {
             "For(literal out of range)",
             &i,
             int32(0),
-            int_imm("int64", 1 << 40),
+            IntImm::int64(1 << 40).into(),
             int32(1),
             evaluate.clone(),
             None,
         ),
-        ("For(uint8 literal)", &i, int_imm("uint8", 3), int32(8), int32(1), evaluate.clone(), None),
+        (
+            "For(uint8 literal)",
+            &i,
+            IntImm::from_dtype(dtype::uint(8), 3, loc()).unwrap().into(),
+            int32(8),
+            int32(1),
+            evaluate.clone(),
+            None,
+        ),
         ("For(narrower var)", &i, int32(0), Expr::from(&i64_var), int32(1), evaluate.clone(), None),
         ("For(float var)", &f, int32(0), int32(8), int32(1), evaluate.clone(), None),
         ("For(float bound)", &i, int32(0), Expr::from(&f), int32(1), evaluate.clone(), None),
         (
             "For(mismatched end)",
             &i64_var,
-            int_imm("int64", 0),
+            IntImm::int64(0).into(),
             Expr::from(&x),
-            int_imm("int64", 1),
+            IntImm::int64(1).into(),
             evaluate.clone(),
             None,
         ),
@@ -198,7 +201,7 @@ fn statements_agree_with_cpp() {
         agree(what, rust, native_for);
     }
 
-    let v4 = prim_var("v", "int32x4");
+    let v4 = prim_var("v", PrimType::int(32).with_lanes(4));
     for (what, condition) in
         [("While", Expr::from(&p)), ("While(vector condition)", Expr::from(&v4))]
     {
@@ -264,7 +267,11 @@ fn regions_agree_with_cpp() {
     let compute = Op::get("tirx.compute_scope").unwrap();
     let exp = Op::get("prim.exp").unwrap();
     let tag = |text: &str| -> Expr { StringImm::new(text, loc()).unwrap().into() };
-    let (t, t64, r) = (prim_var("t", "int32"), prim_var("t64", "int64"), prim_var("r", "int32"));
+    let (t, t64, r) = (
+        prim_var("t", PrimType::int(32)),
+        prim_var("t64", PrimType::int(64)),
+        prim_var("r", PrimType::int(32)),
+    );
     let body: Stmt = Evaluate::new(&t, loc()).unwrap().into();
     let no_attrs = DictAttrs::new(Map::new());
     let note: Map<FfiString, Any> =

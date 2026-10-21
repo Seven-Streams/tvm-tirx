@@ -19,19 +19,20 @@
 
 //! Tests of `tirx::op`.
 
+use tvm_tirx::ir::PrimType;
 use tvm_tirx::tirx::{gpu_thread_return, logaddexp, reinterpret};
 
-use super::{loc, prim_type, var};
+use super::{loc, var};
 use crate::common::{serial, structural_equal};
 
 #[test]
 fn ops() {
     let _serial = serial();
-    let (a, b) = (var("a", prim_type("float32")), var("b", prim_type("float32")));
+    let (a, b) = (var("a", PrimType::float(32)), var("b", PrimType::float(32)));
     let sum = logaddexp(&a, &b, loc()).unwrap();
-    assert!(structural_equal(&sum.ty, &prim_type("float32")));
-    let bits = reinterpret(prim_type("int32"), &a, loc()).unwrap();
-    assert!(structural_equal(&bits.ty, &prim_type("int32")));
+    assert!(structural_equal(&sum.ty, &PrimType::float(32)));
+    let bits = reinterpret(PrimType::int(32), &a, loc()).unwrap();
+    assert!(structural_equal(&bits.ty, &PrimType::int(32)));
     let ret = gpu_thread_return(loc()).unwrap();
-    assert!(structural_equal(&ret.ty, &prim_type("void")));
+    assert!(structural_equal(&ret.ty, &PrimType::void()));
 }

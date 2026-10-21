@@ -23,7 +23,7 @@ use tvm_tirx::ir::{Expr, IntImm, Range, Var};
 use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::{Map, Object, ObjectRefCast};
 
-use super::{fixture, imm, int32, loc, op, range, var, Fixture};
+use super::{fixture, int32, loc, op, range, var, Fixture};
 use crate::common::{assert_type_contracts, global};
 
 #[test]
@@ -95,7 +95,7 @@ fn region_bounds() {
     let x = var("x");
     let var_dom = Map::from_iter([(x.clone(), range(0, 16))]);
     let region = [Range::from_complete_fields(x.clone().into(), int32(1), loc())];
-    let predicate = imm("bool", 1);
+    let predicate = Expr::from(true);
 
     let lower = estimate_region_lower_bound(region.clone(), &var_dom, &predicate, None).unwrap();
     assert_eq!(lower.unwrap().len(), 1);
