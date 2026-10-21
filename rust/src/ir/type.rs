@@ -23,7 +23,9 @@
 //! The objects `python/tvm_tirx/ir/type.py` defines. [`Type`] is the base of every type; a dialect
 //! extends it, as [`TensorType`](crate::tirx::TensorType) does. The constructors are `new`, written
 //! in Rust after the C++ ones; the shared types (`instance`, [`MissingType::new`] and
-//! [`PrimType::from_dtype`]) are the nodes C++ shares, fetched once per thread.
+//! [`PrimType::from_dtype`]) are the nodes C++ shares, fetched once per thread. The common
+//! primitive types are [`PrimType::int`], [`PrimType::float`], [`PrimType::bool`] and their
+//! siblings, as C++ writes `PrimType::Int(32)`.
 
 // `custom-new` reserves `new` for a constructor with the C++ one's semantics (defaults, the shared
 // `MissingType` instance); the generated `from_complete_fields` allocates the fields as given.
@@ -37,8 +39,10 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::location::UnknownLoc
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::dtype
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::dtype;
 use crate::ir::location::Location;
 use crate::ir::location::UnknownLoc;
 use crate::ir::support;
@@ -474,6 +478,48 @@ impl PrimType {
             tvm_ffi::cached_global_func!("ir.PrimType").call_tuple((dtype,))?.try_into()?;
         PRIM_TYPES.with(|types| types.borrow_mut().insert(key, ty.clone()));
         Ok(ty)
+    }
+
+    /// [`PrimType::from_dtype`] of a dtype C++ always accepts, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType) -> Self {
+        support::loaded(Self::from_dtype(dtype))
+    }
+
+    /// The signed integer type of `bits` bits (C++ `PrimType::Int(bits)`).
+    pub fn int(bits: u8) -> Self {
+        Self::builtin(dtype::int(bits))
+    }
+
+    /// The unsigned integer type of `bits` bits (C++ `PrimType::UInt(bits)`).
+    pub fn uint(bits: u8) -> Self {
+        Self::builtin(dtype::uint(bits))
+    }
+
+    /// The IEEE floating-point type of `bits` bits (C++ `PrimType::Float(bits)`).
+    pub fn float(bits: u8) -> Self {
+        Self::builtin(dtype::float(bits))
+    }
+
+    /// The brain floating-point type of `bits` bits (C++ `PrimType::BFloat(bits)`).
+    pub fn bfloat(bits: u8) -> Self {
+        Self::builtin(dtype::bfloat(bits))
+    }
+
+    /// The boolean type (C++ `PrimType::Bool()`).
+    pub fn bool() -> Self {
+        Self::builtin(dtype::bool())
+    }
+
+    /// The void type (C++ `PrimType::Void()`).
+    pub fn void() -> Self {
+        Self::builtin(dtype::void())
+    }
+
+    /// The vector of `lanes` elements of this scalar type (C++ `PrimType::Int(bits, lanes)` and
+    /// `WithLanes(lanes)`): `PrimType::float(16).with_lanes(4)` is `float16x4`.
+    pub fn with_lanes(&self, lanes: u16) -> Self {
+        Self::builtin(dtype::with_lanes(self.dtype, lanes))
     }
 }
 

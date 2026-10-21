@@ -1648,8 +1648,9 @@ fn binary_type(node: &str, operands: Operands, a: &Expr, b: &Expr) -> Result<Typ
 }
 
 /// The boolean type with the lanes of `dtype` (C++ `PrimType(DLDataType{kDLBool, 8, lanes})`).
-fn bool_type(dtype: DLDataType) -> Result<PrimType> {
-    PrimType::from_dtype(DLDataType { code: support::BOOL, bits: 8, lanes: dtype.lanes })
+fn bool_type(operand: DLDataType) -> Result<PrimType> {
+    use crate::ir::dtype;
+    PrimType::from_dtype(dtype::with_lanes(dtype::bool(), operand.lanes))
 }
 
 /// `impl $node { pub fn new(a, b, loc) }` for each binary node, with the checks of its C++

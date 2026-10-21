@@ -19,9 +19,10 @@
 
 //! Tests of `ir::prim::op`: the type-promoting operators.
 
+use tvm_tirx::ir::dtype::with_lanes;
 use tvm_tirx::ir::prim::{self, op};
-use tvm_tirx::ir::{Expr, FloatImm};
-use tvm_tirx::tvm_ffi::ObjectRefCast;
+use tvm_tirx::ir::{Expr, FloatImm, IntImm, PrimType};
+use tvm_tirx::tvm_ffi::{ObjectRefCast, ObjectRefCore};
 
 use super::{dtype, float, int, int_value, ty, var};
 use crate::common::{serial, structural_equal};
@@ -117,4 +118,38 @@ fn math_operators() {
     assert_eq!(int_value(op::min_value(ty("int8"), loc()).unwrap()), -128);
     let inf: FloatImm = op::infinity(ty("float32"), loc()).unwrap().try_cast().unwrap();
     assert!(inf.value.is_infinite());
+}
+
+/// `make_const` builds the constant of the kind of its type, broadcast over the lanes of a vector.
+#[test]
+fn make_const() {
+    let _serial = serial();
+    let seven = op::make_const(PrimType::int(32), 7, loc()).unwrap();
+    assert_eq!(dtype(&seven), "int32");
+    assert_eq!(int_value(seven), 7);
+    assert_eq!(int_value(op::make_const(PrimType::bool(), 1, loc()).unwrap()), 1);
+    assert_eq!(int_value(op::make_const(PrimType::uint(8), 255, loc()).unwrap()), 255);
+    assert!(op::make_const(PrimType::uint(8), -1, loc()).is_err());
+    assert!(op::make_const(PrimType::int(8), 128, loc()).is_err());
+    for ty in [PrimType::float(16), PrimType::bfloat(16), PrimType::float(64)] {
+        let two: FloatImm = op::make_const(ty.clone(), 2, loc()).unwrap().try_cast().unwrap();
+        assert_eq!(two.value, 2.0);
+        assert!(structural_equal(&two.ty, &ty));
+    }
+    assert!(op::make_const(PrimType::void(), 0, loc()).is_err());
+
+    let vector = op::make_const(PrimType::int(32).with_lanes(4), 1, loc()).unwrap();
+    assert_eq!(dtype(&vector), "int32x4");
+    let broadcast: prim::Broadcast = vector.try_cast().unwrap();
+    assert_eq!(int_value(broadcast.value.clone()), 1);
+    assert_eq!(int_value(broadcast.lanes.clone()), 4);
+
+    let scalable =
+        PrimType::from_dtype(with_lanes(PrimType::int(32).dtype, (-4i16) as u16)).unwrap();
+    let vector = op::make_const(scalable.clone(), 1, loc()).unwrap();
+    assert!(structural_equal(&vector.ty, &scalable));
+    let broadcast: prim::Broadcast = vector.try_cast().unwrap();
+    let lanes = broadcast.lanes.as_node::<prim::MulObj>().expect("vscale * 4");
+    assert_eq!(int_value(lanes.b.clone()), 4);
+    let _: IntImm = IntImm::int32(0);
 }

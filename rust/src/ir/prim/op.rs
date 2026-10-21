@@ -36,14 +36,30 @@
 // tvm-ffi-stubgen(import-object): crate::ir::location::Location
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
 // tvm-ffi-stubgen(import-object): crate::ir::prim::expr::BitwiseNot
+// tvm-ffi-stubgen(import-object): crate::ir::expr::FloatImm
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntImm
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::Broadcast
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::vscale_lanes
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): tvm_ffi::DLDataType
+// tvm-ffi-stubgen(import-object): tvm_ffi::DLDataTypeCode
+// tvm-ffi-stubgen(import-object): tvm_ffi::INTERNAL_ERROR
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::FloatImm;
+use crate::ir::expr::IntImm;
 use crate::ir::location::Location;
 use crate::ir::prim::expr::BitwiseNot;
+use crate::ir::prim::vector_expr::Broadcast;
+use crate::ir::prim::vector_expr::vscale_lanes;
 use crate::ir::r#type::PrimType;
+use crate::ir::support;
 use tvm_ffi::Any;
+use tvm_ffi::DLDataType;
+use tvm_ffi::DLDataTypeCode;
 use tvm_ffi::Error;
+use tvm_ffi::INTERNAL_ERROR;
 use tvm_ffi::Result;
 use tvm_ffi::VALUE_ERROR;
 // tvm-ffi-stubgen(end)
@@ -381,4 +397,48 @@ pub fn max_value(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<Ex
 /// The positive infinity of `ty` (`prim.infinity`).
 pub fn infinity(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<Expr> {
     tvm_ffi::cached_global_func!("prim.infinity").call_tuple((&ty.into(), &loc.into()))?.try_into()
+}
+
+/// The constant `value` of type `ty`: an [`IntImm`] of an integer or boolean type, a [`FloatImm`]
+/// of a floating-point type, and the scalar constant broadcast over the lanes of a vector type
+/// (C++ `prim::MakeConst(ty, value, loc)`, which has no global function). An unsigned type takes
+/// no negative value. Prefer [`IntImm::from_dtype`] or [`FloatImm::from_dtype`] when the kind of
+/// the type is known.
+pub fn make_const(ty: impl Into<PrimType>, value: i64, loc: impl Into<Location>) -> Result<Expr> {
+    let (ty, loc) = (ty.into(), loc.into());
+    let dtype = ty.dtype;
+    if !support::is_scalable_vector(dtype) && !support::is_fixed_length_vector(dtype) {
+        return make_const_scalar(dtype, value, loc);
+    }
+    let scalar = make_const_scalar(support::with_lanes(dtype, 1), value, loc.clone())?;
+    let lanes = match support::is_fixed_length_vector(dtype) {
+        true => IntImm::int32(support::lanes(dtype)?).into(),
+        false => vscale_lanes(-i32::from(support::encoded_lanes(dtype)))?,
+    };
+    Ok(Broadcast::new(scalar, lanes, loc)?.into())
+}
+
+/// C++ `prim::MakeConstScalar(ty, value, loc)` for an integer `value`.
+fn make_const_scalar(dtype: DLDataType, value: i64, loc: Location) -> Result<Expr> {
+    const FLOAT8_FIRST: u8 = DLDataTypeCode::kDLFloat8_e3m4 as u8;
+    const FLOAT4_LAST: u8 = DLDataTypeCode::kDLFloat4_e2m1fn as u8;
+    let code = dtype.code;
+    if code == support::INT || code == support::BOOL {
+        return Ok(IntImm::from_dtype(dtype, value, loc)?.into());
+    }
+    if code == support::UINT {
+        if value < 0 {
+            let message = format!("cannot make uint from negative value {value}");
+            return Err(support::check_failed(INTERNAL_ERROR, "value >= 0", &message));
+        }
+        return Ok(IntImm::from_dtype(dtype, value, loc)?.into());
+    }
+    let is_float = code == support::FLOAT
+        || (FLOAT8_FIRST..=FLOAT4_LAST).contains(&code)
+        || (code == support::BFLOAT && dtype.bits == 16);
+    if is_float {
+        return Ok(FloatImm::from_dtype(dtype, value as f64, loc)?.into());
+    }
+    let message = format!("cannot make const for type {}", support::dtype_name(dtype));
+    Err(Error::new(INTERNAL_ERROR, &message, ""))
 }

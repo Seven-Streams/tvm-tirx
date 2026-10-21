@@ -21,10 +21,11 @@
 
 use tvm_tirx::ir::*;
 use tvm_tirx::tvm_ffi::{
-    Any, AnyView, Array, BigInt, Function, ObjectRefCore, Result, String as FfiString,
+    Any, AnyView, Array, BigInt, DLDataType, Function, ObjectRefCast, ObjectRefCore, Result,
+    String as FfiString,
 };
 
-use super::{dtype, int32, int32_var, loc, op, tensor_var};
+use super::{int32, int32_var, loc, op, parse_dtype, tensor_var};
 use crate::common::{agree, agree_fresh, agree_kind, native, serial, structural_equal};
 
 #[test]
@@ -34,10 +35,10 @@ fn expressions() {
     assert_eq!(x.name.as_str(), "x");
     assert_eq!(GlobalVar::new("main", loc()).unwrap().name_hint.as_str(), "main");
     assert_eq!(StringImm::new("hi", loc()).unwrap().value.as_str(), "hi");
-    assert_eq!(FloatImm::from_dtype(dtype("float32"), 1.5, loc()).unwrap().value, 1.5);
-    assert!(IntImm::from_dtype(dtype("uint8"), 256, loc()).is_err());
-    assert_eq!(DataTypeImm::from_dtype(dtype("int8"), loc()).unwrap().value, dtype("int8"));
-    let i32_ty = PrimType::from_dtype(dtype("int32")).unwrap();
+    assert_eq!(FloatImm::float32(1.5).value, 1.5);
+    assert!(IntImm::from_dtype(dtype::uint(8), 256, loc()).is_err());
+    assert_eq!(DataTypeImm::from_dtype(dtype::int(8), loc()).unwrap().value, dtype::int(8));
+    let i32_ty = PrimType::int(32);
     let constant = GenericConst::checked(&i32_ty, Any::from(i32_ty.clone()), loc()).unwrap();
     assert!(GenericConst::checked(&i32_ty, Any::from(1i64), loc()).is_err());
     assert!(structural_equal(&constant.ty, &i32_ty));
@@ -58,7 +59,7 @@ fn expressions() {
     assert!(Expr::try_from(slice).is_ok());
 
     let exp = Op::get("prim.exp").unwrap();
-    let one = FloatImm::from_dtype(dtype("float32"), 1.0, loc()).unwrap();
+    let one = FloatImm::float32(1.0);
     let call = Call::new(None, &exp, [&one], None, Vec::<Type>::new(), loc()).unwrap();
     call.validate().unwrap();
     assert!(structural_equal(&call.reinfer_type().unwrap(), &call.ty));
@@ -87,9 +88,9 @@ fn constants_agree_with_cpp() {
     let _serial = serial();
     let float_imm = |name: &str, value: f64| {
         let native =
-            native("ir.FloatImm", &[(&dtype(name)).into(), (&value).into(), (&loc()).into()]);
+            native("ir.FloatImm", &[(&parse_dtype(name)).into(), (&value).into(), (&loc()).into()]);
         let what = format!("FloatImm({name}, {value})");
-        agree(&what, FloatImm::from_dtype(dtype(name), value, loc()), native);
+        agree(&what, FloatImm::from_dtype(parse_dtype(name), value, loc()), native);
     };
     for (name, value) in [
         ("float32", 1.5),
@@ -115,9 +116,9 @@ fn constants_agree_with_cpp() {
 
     let int_imm = |name: &str, value: BigInt| {
         let native =
-            native("ir.IntImm", &[(&dtype(name)).into(), (&value).into(), (&loc()).into()]);
+            native("ir.IntImm", &[(&parse_dtype(name)).into(), (&value).into(), (&loc()).into()]);
         let what = format!("IntImm({name}, {value})");
-        agree(&what, IntImm::from_dtype(dtype(name), value.clone(), loc()), native);
+        agree(&what, IntImm::from_dtype(parse_dtype(name), value.clone(), loc()), native);
     };
     let big = |text: &str| -> BigInt { text.parse().unwrap() };
     for (name, value) in [
@@ -140,7 +141,7 @@ fn constants_agree_with_cpp() {
         int_imm(name, value);
     }
 
-    let i32_ty = PrimType::from_dtype(dtype("int32")).unwrap();
+    let i32_ty = PrimType::int(32);
     let missing: Type = MissingType::new().unwrap().into();
     let generic = |what: &str, ty: &Type, value: Any| {
         let native = native("ir.GenericConst", &[ty.into(), (&value).into(), (&loc()).into()]);
@@ -154,12 +155,44 @@ fn constants_agree_with_cpp() {
     generic("GenericConst(string)", &i32_ty_as_type, Any::from(FfiString::from("s")));
     generic("GenericConst(missing type)", &missing, Any::from(i32_ty.clone()));
 
-    let int8 = dtype("int8");
+    let int8 = dtype::int(8);
     let native_dtype = native("ir.DataTypeImm", &[(&int8).into(), (&loc()).into()]);
     agree("DataTypeImm", DataTypeImm::from_dtype(int8, loc()), native_dtype);
     let text = FfiString::from("hi");
     let native_string = native("ir.StringImm", &[(&text).into(), (&loc()).into()]);
     agree("StringImm", StringImm::new("hi", loc()), native_string);
+}
+
+/// The constants of the builtin types, and the Rust values that convert to them, are the native
+/// constants of those types.
+#[test]
+fn builtin_constants() {
+    let _serial = serial();
+    let int = |dtype: DLDataType, value: i64| {
+        native("ir.IntImm", &[(&dtype).into(), (&BigInt::from(value)).into(), (&loc()).into()])
+    };
+    let float = |dtype: DLDataType, value: f64| {
+        native("ir.FloatImm", &[(&dtype).into(), (&value).into(), (&loc()).into()])
+    };
+    agree("IntImm::int32", Ok(IntImm::int32(7)), int(dtype::int(32), 7));
+    agree("IntImm::int32(min)", Ok(IntImm::int32(i32::MIN)), int(dtype::int(32), i32::MIN as i64));
+    agree("IntImm::int64", Ok(IntImm::int64(1 << 40)), int(dtype::int(64), 1 << 40));
+    agree("IntImm::bool", Ok(IntImm::bool(true)), int(dtype::bool(), 1));
+    agree("FloatImm::float32", Ok(FloatImm::float32(1.5)), float(dtype::float(32), 1.5));
+    agree(
+        "FloatImm::float32(max)",
+        Ok(FloatImm::float32(f32::MAX)),
+        float(dtype::float(32), f32::MAX as f64),
+    );
+    agree("FloatImm::float64", Ok(FloatImm::float64(1e300)), float(dtype::float(64), 1e300));
+
+    agree("Expr::from(i32)", Ok(Expr::from(3i32)), int(dtype::int(32), 3));
+    agree("Expr::from(i64)", Ok(Expr::from(3i64)), int(dtype::int(64), 3));
+    agree("Expr::from(bool)", Ok(Expr::from(false)), int(dtype::bool(), 0));
+    agree("Expr::from(f32)", Ok(Expr::from(0.5f32)), float(dtype::float(32), 0.5));
+    agree("Expr::from(f64)", Ok(Expr::from(0.5f64)), float(dtype::float(64), 0.5));
+    let folded: IntImm = op("prim._OpAdd", 1i32, 2i32).try_cast().unwrap();
+    assert_eq!(folded.value, BigInt::from(3));
 }
 
 #[test]
@@ -169,7 +202,7 @@ fn shared_nodes_are_the_native_ones() {
     assert!(UnknownLoc::new().unwrap().same_as(&unknown));
     let missing: Type = native("ir.MissingType", &[]).unwrap().try_into().unwrap();
     assert!(MissingType::new().unwrap().same_as(&missing));
-    let int32_dtype = dtype("int32");
+    let int32_dtype = dtype::int(32);
     let int32_ty: Type =
         native("ir.PrimType", &[(&int32_dtype).into()]).unwrap().try_into().unwrap();
     assert!(PrimType::from_dtype(int32_dtype).unwrap().same_as(&int32_ty));
@@ -180,7 +213,7 @@ fn expressions_agree_with_cpp() {
     let _serial = serial();
     let (x, n) = (int32_var("x"), int32_var("n"));
     let untyped = Var::new("u", None, loc()).unwrap();
-    let i32_ty: Type = PrimType::from_dtype(dtype("int32")).unwrap().into();
+    let i32_ty: Type = PrimType::int(32).into();
 
     let name = FfiString::from("main");
     let native_global = native("ir.GlobalVar", &[(&name).into(), (&loc()).into()]);
@@ -283,9 +316,9 @@ fn test_op(name: &str, attrs: &[(&str, Any)]) -> Op {
 fn calls_agree_with_cpp() {
     let _serial = serial();
     let x = int32_var("x");
-    let f32_ty: Type = PrimType::from_dtype(dtype("float32")).unwrap().into();
-    let one: Expr = FloatImm::from_dtype(dtype("float32"), 1.0, loc()).unwrap().into();
-    let i16_ty: Type = PrimType::from_dtype(dtype("int16")).unwrap().into();
+    let f32_ty: Type = PrimType::float(32).into();
+    let one: Expr = FloatImm::float32(1.0).into();
+    let i16_ty: Type = PrimType::int(16).into();
     let returns = |value: Any| {
         Function::from_packed(move |_args: &[AnyView]| -> Result<Any> { Ok(value.clone()) })
     };

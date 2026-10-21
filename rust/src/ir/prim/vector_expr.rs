@@ -365,26 +365,28 @@ fn vector_lanes(element: DLDataType, lanes: Expr) -> Result<(DLDataType, Expr)> 
                 "",
             ));
         }
-        let lanes = IntImm::from_dtype(INT32, count, UnknownLoc::new()?)?;
-        return Ok((support::with_lanes(element, count), lanes.into()));
+        return Ok((support::with_lanes(element, count), IntImm::int32(count).into()));
     }
     let Some(factor) = vscale_factor(&lanes)? else {
         let message = format!("Invalid expression for scalable lanes {}", support::repr(&lanes));
         return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, "vscale_factor", &message));
     };
-    let dtype = support::scalable_vector(element, factor)?;
-    let int32 = PrimType::from_dtype(INT32)?;
+    Ok((support::scalable_vector(element, factor)?, vscale_lanes(factor)?))
+}
+
+/// The lane count of a scalable vector of `factor` times `vscale` lanes, as C++ spells it:
+/// `vscale() * factor`, both `int32`.
+pub(crate) fn vscale_lanes(factor: i32) -> Result<Expr> {
     let vscale = support::cached_op("prim.vscale")?;
     let vscale = Call::new(
-        Some(&int32.into()),
+        Some(&PrimType::int(32).into()),
         vscale,
         Vec::<Expr>::new(),
         None,
         Vec::<Type>::new(),
         UnknownLoc::new()?,
     )?;
-    let factor = IntImm::from_dtype(INT32, factor, UnknownLoc::new()?)?;
-    Ok((dtype, Mul::new(vscale, factor, UnknownLoc::new()?)?.into()))
+    Ok(Mul::new(vscale, IntImm::int32(factor), UnknownLoc::new()?)?.into())
 }
 
 /// `factor` when `lanes` is `factor * vscale` or `vscale * factor` (C++ `ExtractVscaleFactor`).
@@ -406,9 +408,6 @@ fn vscale_factor(lanes: &Expr) -> Result<Option<i32>> {
     }
     Ok(None)
 }
-
-/// `int32`.
-const INT32: DLDataType = DLDataType { code: support::INT, bits: 32, lanes: 1 };
 
 /// C++ `prim::cast(value, dtype)` to the scalar type `dtype`, which differs from the type of
 /// `value`: a constant is converted (`MakeConst`), anything else becomes a `Cast` node.

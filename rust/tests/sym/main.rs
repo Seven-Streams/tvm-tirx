@@ -56,13 +56,8 @@ fn op(name: &str, a: impl Into<Expr>, b: impl Into<Expr>) -> Expr {
 }
 
 fn var(name: &str) -> Var {
-    let int32_ty: PrimType = global("ir.PrimType")
-        .call_tuple((DLDataType::try_from_str("int32").unwrap(),))
-        .unwrap()
-        .try_into()
-        .unwrap();
     global("ir.Var")
-        .call_tuple((FfiString::from(name), int32_ty, loc()))
+        .call_tuple((FfiString::from(name), PrimType::int(32), loc()))
         .unwrap()
         .try_into()
         .unwrap()

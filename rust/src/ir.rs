@@ -32,6 +32,7 @@
 
 pub mod attrs;
 pub mod base;
+pub mod dtype;
 pub mod expr;
 pub mod function;
 pub mod global_info;

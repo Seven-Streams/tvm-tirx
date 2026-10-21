@@ -24,15 +24,16 @@
 mod common;
 
 use tvm_tirx::runtime::{self, MemoryScope};
-use tvm_tirx::tvm_ffi::{DLDataType, DLDataTypeExt, DLDevice, DLDeviceType, Module, TypeIndex};
+use tvm_tirx::ir::dtype;
+use tvm_tirx::tvm_ffi::{DLDevice, DLDeviceType, Module, TypeIndex};
 
 #[test]
 fn tensors() {
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
-    let float32 = DLDataType::try_from_str("float32").unwrap();
+    let float32 = dtype::float(32);
     let tensor = runtime::empty(&[2, 8], float32, cpu, None).unwrap();
     assert_eq!(tensor.shape(), &[2, 8]);
-    let int8 = DLDataType::try_from_str("int8").unwrap();
+    let int8 = dtype::int(8);
     let view = runtime::create_view(&tensor, &[4, 4], int8, 4 * 4).unwrap();
     assert_eq!(view.shape(), &[4, 4]);
     assert_eq!(view.dtype(), int8);
@@ -46,7 +47,7 @@ fn memory_scopes() {
     assert!(again.is_err());
     // The CPU allocator supports the global scope only.
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
-    let float32 = DLDataType::try_from_str("float32").unwrap();
+    let float32 = dtype::float(32);
     assert!(runtime::empty(&[4], float32, cpu, Some(&scope)).is_err());
 }
 

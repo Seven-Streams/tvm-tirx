@@ -46,16 +46,17 @@ fn loc() -> Location {
     Location::unknown().unwrap()
 }
 
-fn dtype(name: &str) -> DLDataType {
+/// The dtype a test names, for the cases that range over dtypes.
+fn parse_dtype(name: &str) -> DLDataType {
     DLDataType::try_from_str(name).unwrap()
 }
 
 fn int32(value: i64) -> Expr {
-    IntImm::from_dtype(dtype("int32"), value, loc()).unwrap().into()
+    IntImm::from_dtype(dtype::int(32), value, loc()).unwrap().into()
 }
 
 fn int32_var(name: &str) -> Var {
-    let ty: Type = PrimType::from_dtype(dtype("int32")).unwrap().into();
+    let ty: Type = PrimType::int(32).into();
     Var::new(name, Some(&ty), loc()).unwrap()
 }
 
@@ -82,7 +83,7 @@ fn scope() -> MemoryScope {
 /// A variable of type `float32[16]`.
 fn tensor_var(name: &str) -> Var {
     let shape: Array<Expr> = [int32(16)].into_iter().collect();
-    let f32_ty = PrimType::from_dtype(dtype("float32")).unwrap();
+    let f32_ty = PrimType::float(32);
     let (scope, alignment, layout) = (scope(), 0i32, Option::<Expr>::None);
     let ty: Type = global("tirx.TensorType")
         .call_packed(&[
@@ -107,7 +108,7 @@ fn seq(stmts: impl IntoIterator<Item = impl Into<Stmt>>) -> SeqStmt {
 fn function(value: i64) -> BaseFunc {
     let params = Array::<Var>::new(vec![]);
     let body = Some(seq([Return::new(int32(value), loc()).unwrap()]));
-    let ret_type: Type = PrimType::from_dtype(dtype("int32")).unwrap().into();
+    let ret_type: Type = PrimType::int(32).into();
     let attrs = DictAttrs::new(Map::new());
     global("tirx.Function")
         .call_tuple((params, body, ret_type, attrs, loc()))

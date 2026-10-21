@@ -47,6 +47,12 @@ pub(crate) const BOOL: u8 = DLDataTypeCode::kDLBool as u8;
 // ---------------------------------------------------------------------------------------------
 // Errors
 
+/// The value of a native call that fails only when the compiler library is not loaded, which
+/// every use of the crate requires: a failure is a bug in the setup, and panics.
+pub(crate) fn loaded<T>(result: Result<T>) -> T {
+    result.expect("libtvm_tirx_compiler is loaded and its global functions are registered")
+}
+
 /// The error of a failed C++ `TVM_FFI_CHECK(condition, kind) << message`; `TVM_FFI_ICHECK` is
 /// `INTERNAL_ERROR`.
 pub(crate) fn check_failed(kind: ErrorKind, condition: &str, message: &str) -> Error {

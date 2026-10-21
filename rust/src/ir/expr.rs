@@ -24,7 +24,9 @@
 //! carries its type and location. The primitive arithmetic and vector expressions are in
 //! [`prim`](super::prim). The constructors are `new`, or `from_dtype` and the like where `new`
 //! allocates the fields as given; they are written in Rust after the C++ constructors, with their
-//! checks, defaults and errors.
+//! checks, defaults and errors. The constants of the common types are [`IntImm::int32`],
+//! [`IntImm::int64`], [`IntImm::bool`], [`FloatImm::float32`] and [`FloatImm::float64`], and an
+//! `i32`, `i64`, `bool`, `f32` or `f64` converts into an [`Expr`] as C++ converts it implicitly.
 
 // `custom-new` reserves `new` for a constructor with the C++ one's semantics (defaults, implicit
 // conversions, a derived type); the generated `from_complete_fields` allocates the fields as given.
@@ -55,9 +57,11 @@
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::TupleType
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::TupleTypeObj
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::dtype
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
+use crate::ir::dtype;
 use crate::ir::location::Location;
 use crate::ir::location::UnknownLoc;
 use crate::ir::op::OpObj;
@@ -720,6 +724,52 @@ impl FloatImm {
         check_float_imm(dtype, value)?;
         Ok(Self::new(loc.into(), ty.into(), value))
     }
+
+    /// The `float32` constant `value` at the unknown location, which every `f32` is
+    /// (C++ `FloatImm(PrimType::Float(32), value)`).
+    pub fn float32(value: f32) -> Self {
+        Self::builtin(dtype::float(32), value as f64)
+    }
+
+    /// The `float64` constant `value` at the unknown location, which every `f64` is
+    /// (C++ `FloatImm(PrimType::Float(64), value)`).
+    pub fn float64(value: f64) -> Self {
+        Self::builtin(dtype::float(64), value)
+    }
+
+    /// [`FloatImm::from_dtype`] of a value its type holds, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType, value: f64) -> Self {
+        let loc = support::loaded(UnknownLoc::new());
+        support::loaded(Self::from_dtype(dtype, value, loc))
+    }
+}
+
+/// An `f32` is a `float32` constant, as C++ converts a `float` to a `PrimExpr`.
+impl From<f32> for FloatImm {
+    fn from(value: f32) -> Self {
+        Self::float32(value)
+    }
+}
+
+/// An `f64` is a `float64` constant. (C++ converts a `double` held by an `Any` to `float32`, as
+/// [`prim::convert`](crate::ir::prim::convert) does.)
+impl From<f64> for FloatImm {
+    fn from(value: f64) -> Self {
+        Self::float64(value)
+    }
+}
+
+impl From<f32> for Expr {
+    fn from(value: f32) -> Self {
+        FloatImm::float32(value).into()
+    }
+}
+
+impl From<f64> for Expr {
+    fn from(value: f64) -> Self {
+        FloatImm::float64(value).into()
+    }
 }
 
 /// The largest finite value of each float8 type code, and whether the type is unsigned
@@ -902,6 +952,70 @@ impl IntImm {
         let (value, ty) = (value.into(), PrimType::from_dtype(dtype)?);
         check_int_imm(dtype, &value)?;
         Ok(Self::new(loc.into(), ty.into(), value))
+    }
+
+    /// The `int32` constant `value` at the unknown location, which every `i32` is
+    /// (C++ `IntImm::Int32(value)`).
+    pub fn int32(value: i32) -> Self {
+        Self::builtin(dtype::int(32), value)
+    }
+
+    /// The `int64` constant `value` at the unknown location, which every `i64` is
+    /// (C++ `IntImm::Int64(value)`).
+    pub fn int64(value: i64) -> Self {
+        Self::builtin(dtype::int(64), value)
+    }
+
+    /// The boolean constant `value` at the unknown location (C++ `IntImm::Bool(value)`).
+    pub fn bool(value: bool) -> Self {
+        Self::builtin(dtype::bool(), value)
+    }
+
+    /// [`IntImm::from_dtype`] of a value its type holds, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType, value: impl Into<BigInt>) -> Self {
+        let loc = support::loaded(UnknownLoc::new());
+        support::loaded(Self::from_dtype(dtype, value, loc))
+    }
+}
+
+/// An `i32` is an `int32` constant, as C++ converts an `int` to a `PrimExpr`.
+impl From<i32> for IntImm {
+    fn from(value: i32) -> Self {
+        Self::int32(value)
+    }
+}
+
+/// An `i64` is an `int64` constant. (C++ converts an `int64_t` held by an `Any` to `int32` when
+/// the value fits, as [`prim::convert`](crate::ir::prim::convert) does.)
+impl From<i64> for IntImm {
+    fn from(value: i64) -> Self {
+        Self::int64(value)
+    }
+}
+
+/// A `bool` is a boolean constant, as C++ converts a `bool` to a `PrimExpr`.
+impl From<bool> for IntImm {
+    fn from(value: bool) -> Self {
+        Self::bool(value)
+    }
+}
+
+impl From<i32> for Expr {
+    fn from(value: i32) -> Self {
+        IntImm::int32(value).into()
+    }
+}
+
+impl From<i64> for Expr {
+    fn from(value: i64) -> Self {
+        IntImm::int64(value).into()
+    }
+}
+
+impl From<bool> for Expr {
+    fn from(value: bool) -> Self {
+        IntImm::bool(value).into()
     }
 }
 

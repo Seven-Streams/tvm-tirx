@@ -78,6 +78,13 @@
 //! `MissingType` and the `PrimType` of each dtype, fetched once per thread), for the hooks an
 //! operator or type registers (such as `FInferType`), and for printing in an error message.
 //!
+//! The common types and constants have the short constructors C++ has: [`ir::PrimType::int`]
+//! and its siblings for `PrimType::Int(32)`, [`ir::IntImm::int32`], [`ir::IntImm::bool`] and
+//! [`ir::FloatImm::float32`] for the constants, [`ir::prim::make_const`] for a constant of any
+//! type, and the conversions of `i32`, `i64`, `bool`, `f32` and `f64` into an [`ir::Expr`] that
+//! C++ makes implicitly. [`ir::dtype`] spells the `DLDataType` of each (`dtype::int(32)`) without
+//! parsing a string.
+//!
 //! # Generated and hand-written code
 //!
 //! The code between a `// tvm-ffi-stubgen(begin)` and its `// tvm-ffi-stubgen(end)` is generated

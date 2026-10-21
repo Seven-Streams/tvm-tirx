@@ -22,7 +22,7 @@
 use tvm_tirx::ir::*;
 use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
 
-use super::{dtype, int32, int32_var, loc, op, seq, tensor_var};
+use super::{int32, int32_var, loc, op, parse_dtype, seq, tensor_var};
 use crate::common::{agree, native, serial, structural_equal};
 
 #[test]
@@ -62,7 +62,7 @@ fn statements() {
     assert_eq!(assert_.message_parts.len(), 1);
 
     let a = tensor_var("A");
-    let one = FloatImm::from_dtype(dtype("float32"), 1.0, loc()).unwrap();
+    let one = FloatImm::float32(1.0);
     let store = TensorStore::new(&a, [&x], &one, loc()).unwrap();
     assert_eq!(store.indices.len(), 1);
 
@@ -82,12 +82,12 @@ fn statements() {
 
 /// A variable of the primitive type `dtype`.
 fn prim_var(name: &str, dtype_name: &str) -> Var {
-    let ty: Type = PrimType::from_dtype(dtype(dtype_name)).unwrap().into();
+    let ty: Type = PrimType::from_dtype(parse_dtype(dtype_name)).unwrap().into();
     Var::new(name, Some(&ty), loc()).unwrap()
 }
 
 fn int_imm(dtype_name: &str, value: i64) -> Expr {
-    IntImm::from_dtype(dtype(dtype_name), value, loc()).unwrap().into()
+    IntImm::from_dtype(parse_dtype(dtype_name), value, loc()).unwrap().into()
 }
 
 /// A `For` case: its name, variable, begin, end, step, body and annotations.
@@ -208,7 +208,7 @@ fn statements_agree_with_cpp() {
     }
 
     let a = tensor_var("A");
-    let one: Expr = FloatImm::from_dtype(dtype("float32"), 1.0, loc()).unwrap().into();
+    let one: Expr = FloatImm::float32(1.0).into();
     let stores: Vec<(&str, Expr, Vec<Expr>, Expr)> = vec![
         ("TensorStore", Expr::from(&a), vec![Expr::from(&x)], one.clone()),
         ("TensorStore(rank)", Expr::from(&a), vec![Expr::from(&x), Expr::from(&x)], one.clone()),

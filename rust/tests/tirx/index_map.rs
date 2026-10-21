@@ -19,9 +19,9 @@
 
 //! Tests of `tirx::index_map`.
 
-use tvm_tirx::ir::Expr;
+use tvm_tirx::ir::{dtype, Expr};
 use tvm_tirx::tirx::IndexMap;
-use tvm_tirx::tvm_ffi::{Array, DLDataType, DLDataTypeExt, DLDevice, DLDeviceType};
+use tvm_tirx::tvm_ffi::{Array, DLDevice, DLDeviceType};
 
 use super::{as_i64, int32, op, prim_type, range, var};
 use crate::common::{serial, structural_equal};
@@ -56,9 +56,7 @@ fn index_maps() {
     assert!(!structural_equal(&predicate, &int32(0)));
 
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
-    let tensor =
-        tvm_tirx::runtime::empty(&[4, 8], DLDataType::try_from_str("float32").unwrap(), cpu, None)
-            .unwrap();
+    let tensor = tvm_tirx::runtime::empty(&[4, 8], dtype::float(32), cpu, None).unwrap();
     let transposed = transpose.map_tensor(&tensor).unwrap();
     assert_eq!(transposed.shape(), &[8, 4]);
 }
