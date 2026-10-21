@@ -22,14 +22,28 @@
 //!
 //! The objects `python/tvm_tirx/tirx/index_map.py` defines. An [`IndexMap`] maps its
 //! `initial_indices` to its `final_indices`, as `(i, j) -> (j, i)` does, and may hold its inverse.
+//! Its methods apply it to indices, shapes and tensors, and invert it.
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Range
+// tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
+// tvm-ffi-stubgen(import-object): tvm_ffi::Any
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): tvm_ffi::Tensor
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::Range;
 use crate::ir::expr::Var;
+use crate::sym::analyzer::Analyzer;
 use std::ops::Deref;
+use tvm_ffi::Any;
 use tvm_ffi::Array;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
+use tvm_ffi::Tensor;
 use tvm_ffi::object::ObjectRef;
 // tvm-ffi-stubgen(end)
 
@@ -87,3 +101,65 @@ impl IndexMap {
     }
 }
 // tvm-ffi-stubgen(end)
+
+// The native `tirx.IndexMap` stores its fields as given, as the generated `IndexMap::new` does.
+
+impl IndexMap {
+    /// The final indices `indices` map to (`tirx.IndexMapMapIndices`).
+    pub fn map_indices(
+        &self,
+        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        analyzer: Option<&Analyzer>,
+    ) -> Result<Array<Expr>> {
+        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("tirx.IndexMapMapIndices")
+            .call_tuple((self, &indices, analyzer.cloned()))?
+            .try_into()
+    }
+
+    /// The shape a buffer of `shape` has after the mapping (`tirx.IndexMapMapShape`).
+    pub fn map_shape(
+        &self,
+        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        analyzer: Option<&Analyzer>,
+    ) -> Result<Array<Expr>> {
+        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("tirx.IndexMapMapShape")
+            .call_tuple((self, &shape, analyzer.cloned()))?
+            .try_into()
+    }
+
+    /// A copy of `tensor` with its elements moved to the mapped indices
+    /// (`tirx.IndexMapMapTensor`).
+    pub fn map_tensor(&self, tensor: &Tensor) -> Result<Tensor> {
+        tvm_ffi::cached_global_func!("tirx.IndexMapMapTensor")
+            .call_tuple((self, tensor))?
+            .try_into()
+    }
+
+    /// The inverse map, which must be bijective over `ranges` (`tirx.IndexMapInverse`).
+    pub fn inverse(
+        &self,
+        ranges: impl IntoIterator<Item = impl Into<Range>>,
+        analyzer: Option<&Analyzer>,
+    ) -> Result<IndexMap> {
+        let ranges = ranges.into_iter().map(Into::into).collect::<Array<Range>>();
+        tvm_ffi::cached_global_func!("tirx.IndexMapInverse")
+            .call_tuple((self, &ranges, analyzer.cloned()))?
+            .try_into()
+    }
+
+    /// The inverse of a map that may pad `ranges`, and the predicate under which the inverse maps
+    /// to an index in `ranges` (`tirx.IndexMapNonSurjectiveInverse`).
+    pub fn non_surjective_inverse(
+        &self,
+        ranges: impl IntoIterator<Item = impl Into<Range>>,
+        analyzer: Option<&Analyzer>,
+    ) -> Result<(IndexMap, Expr)> {
+        let ranges = ranges.into_iter().map(Into::into).collect::<Array<Range>>();
+        let pair: Array<Any> = tvm_ffi::cached_global_func!("tirx.IndexMapNonSurjectiveInverse")
+            .call_tuple((self, &ranges, analyzer.cloned()))?
+            .try_into()?;
+        Ok((pair.get(0)?.try_into()?, pair.get(1)?.try_into()?))
+    }
+}

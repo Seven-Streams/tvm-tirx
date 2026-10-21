@@ -20,18 +20,35 @@
 
 //! Primitive expressions: scalar arithmetic, comparisons and vector lanes.
 //!
-//! Laid out like `python/tvm_tirx/ir/prim/`: [`expr`] holds the scalar expressions and
-//! [`vector_expr`] the vector ones.
+//! Laid out like `python/tvm_tirx/ir/prim/`: [`expr`] holds the scalar expressions,
+//! [`vector_expr`] the vector ones and [`op`] the type-promoting operators. This module holds
+//! [`expr_deep_equal`], from `prim/__init__.py`.
 
 // An object registered under `prim` that no file has a block for yet is generated here, to be moved
 // to the file of the Python module that defines it.
 // tvm-ffi-stubgen(prefix): prim
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 
 pub mod expr;
+pub mod op;
 pub mod vector_expr;
 
 pub use expr::*;
+pub use op::*;
 pub use vector_expr::*;
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::expr::Expr;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
+
+/// Whether `lhs` and `rhs` are the same expression tree, without remapping variables: use
+/// structural equality for that (`prim.expr_deep_equal`).
+pub fn expr_deep_equal(lhs: impl Into<Expr>, rhs: impl Into<Expr>) -> Result<bool> {
+    tvm_ffi::cached_global_func!("prim.expr_deep_equal")
+        .call_tuple((&lhs.into(), &rhs.into()))?
+        .try_into()
+}

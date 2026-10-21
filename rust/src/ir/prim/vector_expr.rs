@@ -22,13 +22,17 @@
 //!
 //! The objects `python/tvm_tirx/ir/prim/vector_expr.py` defines. A [`Ramp`] is `lanes` values
 //! from `base_` by `stride`, a [`Broadcast`] repeats a value over `lanes`, and a [`Shuffle`]
-//! selects lanes from its vectors.
+//! selects lanes from its vectors. Their `new` is the native constructor, which checks the
+//! operands and derives the vector type.
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (operand checks and
 // the derived vector type); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): prim.Ramp
 // tvm-ffi-stubgen(custom-new): prim.Broadcast
 // tvm-ffi-stubgen(custom-new): prim.Shuffle
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
@@ -38,6 +42,7 @@ use crate::ir::r#type::Type;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/prim.Ramp
@@ -216,3 +221,46 @@ impl Shuffle {
 
 tvm_ffi::impl_object_upcast!(Shuffle => Expr);
 // tvm-ffi-stubgen(end)
+
+impl Ramp {
+    /// The vector of `lanes` values from `base` by `stride`, with `stride` cast to the type of
+    /// `base` (`prim.Ramp`).
+    pub fn new(
+        base: impl Into<Expr>,
+        stride: impl Into<Expr>,
+        lanes: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Ramp")
+            .call_tuple((&base.into(), &stride.into(), &lanes.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Broadcast {
+    /// The vector of `lanes` copies of the scalar `value` (`prim.Broadcast`).
+    pub fn new(
+        value: impl Into<Expr>,
+        lanes: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Broadcast")
+            .call_tuple((&value.into(), &lanes.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Shuffle {
+    /// The vector of the lanes at `indices` of the concatenated `vectors` (`prim.Shuffle`).
+    pub fn new(
+        vectors: impl IntoIterator<Item = impl Into<Expr>>,
+        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let vectors = vectors.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("prim.Shuffle")
+            .call_tuple((&vectors, &indices, &loc.into()))?
+            .try_into()
+    }
+}

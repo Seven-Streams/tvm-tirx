@@ -17,16 +17,19 @@
  * under the License.
  */
 
-//! Helpers shared by the binding smoke tests.
+//! Helpers shared by the test binaries, one per top-level module of the crate.
 
 #![allow(dead_code)]
 
 use std::mem::size_of;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use tvm_tirx::ir::{BaseFunc, GlobalInfo, GlobalVar, IRModule};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::{TVMFFIGetTypeInfo, TVMFFITypeInfo};
-use tvm_tirx::tvm_ffi::{AnyCompatible, AnyView, Function, Module, ObjectCore};
+use tvm_tirx::tvm_ffi::{
+    AnyCompatible, AnyView, Array, Function, Map, Module, ObjectCore, String as FfiString,
+};
 
 static TIRX_COMPILER: OnceLock<Module> = OnceLock::new();
 
@@ -44,6 +47,14 @@ pub fn load_tirx_compiler() {
     });
 }
 
+/// Run the tests of a binary one at a time: registering an operator, a memory scope or the layout
+/// axes of a backend grows a native registry, which other threads must not read meanwhile, and
+/// two threads that register the same layout axes collide.
+pub fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub fn global(name: &str) -> Function {
     Function::get_global(name).unwrap()
 }
@@ -58,6 +69,18 @@ pub fn structural_equal<L: AnyCompatible, R: AnyCompatible>(lhs: &L, rhs: &R) ->
         ])
         .unwrap();
     bool::try_from(equal).unwrap()
+}
+
+pub fn empty_module() -> IRModule {
+    global("ir.IRModule")
+        .call_tuple((
+            Map::<GlobalVar, BaseFunc>::new(),
+            (),
+            Map::<FfiString, Array<GlobalInfo>>::new(),
+        ))
+        .unwrap()
+        .try_into()
+        .unwrap()
 }
 
 pub fn runtime_type_info<N: ObjectCore>() -> &'static TVMFFITypeInfo {

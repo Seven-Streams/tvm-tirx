@@ -23,9 +23,14 @@
 //! The objects `python/tvm_tirx/ir/transform/core.py` defines. A [`Pass`] carries its
 //! [`PassInfo`] (name and optimization level); [`ModulePass`] and [`Sequential`] are passes over a
 //! module. A [`PassContext`] holds the optimization level, the required and disabled passes, the
-//! configuration and the instruments of a run.
+//! configuration and the instruments of a run; [`PassContext::enter`] makes it current.
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::module::IRModule
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::module::IRModule;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
@@ -278,3 +283,138 @@ impl SequentialObj {
 
 tvm_ffi::impl_object_upcast!(Sequential => Pass);
 // tvm-ffi-stubgen(end)
+
+// `PassInfo::new` above has the semantics of the native `transform.PassInfo`, which only stores
+// its fields.
+
+/// A pass context in effect while it is alive: [`PassContext::enter`].
+///
+/// The entered pass contexts are a stack of the thread, so a scope stays on the thread that
+/// opened it, and the scopes end in the reverse order they were opened: drop the innermost one
+/// first.
+///
+/// ```compile_fail
+/// fn send<T: Send>() {}
+/// send::<tvm_tirx::ir::transform::PassContextScope>();
+/// ```
+#[must_use = "the pass context is exited when the scope is dropped"]
+pub struct PassContextScope(PassContext, crate::ThreadBound);
+
+impl Drop for PassContextScope {
+    fn drop(&mut self) {
+        // A destructor cannot report the error, and exiting the innermost context does not fail.
+        let _ = tvm_ffi::cached_global_func!("transform.ExitPassContext").call_tuple((&self.0,));
+    }
+}
+
+impl PassContext {
+    /// A pass context with its `config` checked and converted to the registered option types;
+    /// `None` is the empty configuration (`transform.PassContext`).
+    pub fn create(
+        opt_level: i32,
+        required_pass: impl IntoIterator<Item = impl AsRef<str>>,
+        disabled_pass: impl IntoIterator<Item = impl AsRef<str>>,
+        instruments: impl IntoIterator<Item = impl Into<PassInstrument>>,
+        config: Option<&Map<String, Any>>,
+    ) -> Result<Self> {
+        let required_pass =
+            required_pass.into_iter().map(|name| String::from(name.as_ref())).collect::<Array<_>>();
+        let disabled_pass =
+            disabled_pass.into_iter().map(|name| String::from(name.as_ref())).collect::<Array<_>>();
+        let instruments =
+            instruments.into_iter().map(Into::into).collect::<Array<PassInstrument>>();
+        tvm_ffi::cached_global_func!("transform.PassContext")
+            .call_tuple((opt_level, &required_pass, &disabled_pass, &instruments, config.cloned()))?
+            .try_into()
+    }
+
+    /// The innermost pass context in effect, or the default one
+    /// (`transform.GetCurrentPassContext`).
+    pub fn current() -> Result<Self> {
+        tvm_ffi::cached_global_func!("transform.GetCurrentPassContext").call_tuple(())?.try_into()
+    }
+
+    /// Make this the current pass context until the returned scope is dropped
+    /// (`transform.EnterPassContext`, `transform.ExitPassContext`).
+    pub fn enter(&self) -> Result<PassContextScope> {
+        tvm_ffi::cached_global_func!("transform.EnterPassContext").call_tuple((self,))?;
+        Ok(PassContextScope(self.clone(), crate::ThreadBound::default()))
+    }
+
+    /// Replace the instruments, exiting the old ones and entering the new ones
+    /// (`transform.OverrideInstruments`).
+    pub fn override_instruments(
+        &self,
+        instruments: impl IntoIterator<Item = impl Into<PassInstrument>>,
+    ) -> Result<()> {
+        let instruments =
+            instruments.into_iter().map(Into::into).collect::<Array<PassInstrument>>();
+        tvm_ffi::cached_global_func!("transform.OverrideInstruments")
+            .call_tuple((self, &instruments))?;
+        Ok(())
+    }
+
+    /// The registered configuration options, each with its metadata such as its `type`
+    /// (`transform.ListConfigs`).
+    pub fn list_configs() -> Result<Map<String, Map<String, String>>> {
+        tvm_ffi::cached_global_func!("transform.ListConfigs").call_tuple(())?.try_into()
+    }
+}
+
+impl Pass {
+    /// The name and optimization level of the pass (`transform.Info`).
+    pub fn info(&self) -> Result<PassInfo> {
+        tvm_ffi::cached_global_func!("transform.Info").call_tuple((self,))?.try_into()
+    }
+
+    /// Run the pass on `module`, which it consumes, under the current pass context
+    /// (`transform.RunPass`).
+    pub fn run(&self, module: impl Into<IRModule>) -> Result<IRModule> {
+        let module = tvm_ffi::RValueRef::new(module.into());
+        tvm_ffi::cached_global_func!("transform.RunPass")
+            .call_packed(&[tvm_ffi::AnyView::from(self), tvm_ffi::AnyView::from(&module)])?
+            .try_into()
+    }
+}
+
+impl ModulePass {
+    /// The pass that applies `pass_func` to the module it runs on, which `pass_func` receives
+    /// by value (`transform.MakeModulePass`).
+    ///
+    /// The pass may run on any thread, so `pass_func` is `Send + Sync`.
+    pub fn new(
+        pass_func: impl Fn(IRModule, PassContext) -> Result<IRModule> + Send + Sync + 'static,
+        pass_info: impl Into<PassInfo>,
+    ) -> Result<Self> {
+        let pass_func = tvm_ffi::Function::from_typed(
+            move |module: tvm_ffi::RValueRef<IRModule>, ctx: PassContext| {
+                pass_func(module.into_inner(), ctx)
+            },
+        );
+        tvm_ffi::cached_global_func!("transform.MakeModulePass")
+            .call_tuple((&pass_func, &pass_info.into()))?
+            .try_into()
+    }
+}
+
+impl Sequential {
+    /// The pass that runs `passes` in order, skipping those the current pass context disables or
+    /// whose level exceeds its `opt_level` (`transform.Sequential`).
+    pub fn new(
+        passes: impl IntoIterator<Item = impl Into<Pass>>,
+        opt_level: i32,
+        name: &str,
+    ) -> Result<Self> {
+        let passes = passes.into_iter().map(Into::into).collect::<Array<Pass>>();
+        tvm_ffi::cached_global_func!("transform.Sequential")
+            .call_tuple((&passes, opt_level, String::from(name)))?
+            .try_into()
+    }
+}
+
+/// The pass that logs `header` and the module, which it returns unchanged (`transform.PrintIR`).
+pub fn print_ir(header: &str) -> Result<Pass> {
+    tvm_ffi::cached_global_func!("transform.PrintIR")
+        .call_tuple((String::from(header),))?
+        .try_into()
+}

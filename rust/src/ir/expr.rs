@@ -22,7 +22,8 @@
 //!
 //! The objects `python/tvm_tirx/ir/expr.py` defines. [`Expr`] is the base of every expression and
 //! carries its type and location. The primitive arithmetic and vector expressions are in
-//! [`prim`](super::prim).
+//! [`prim`](super::prim). The constructors with the native semantics are `new`, or `from_dtype`
+//! and the like where `new` allocates the fields as given.
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (defaults, implicit
 // conversions, a derived type); the generated `from_complete_fields` allocates the fields as given.
@@ -34,6 +35,10 @@
 // tvm-ffi-stubgen(custom-new): ir.Var
 // tvm-ffi-stubgen(custom-new): ir.LambdaExpr
 // tvm-ffi-stubgen(custom-new): ir.Range
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
@@ -41,11 +46,13 @@ use crate::ir::location::Location;
 use crate::ir::r#type::Type;
 use std::ops::Deref;
 use tvm_ffi::Any;
+use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::BigInt;
 use tvm_ffi::DLDataType;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
@@ -93,6 +100,44 @@ impl Expr {
     }
 }
 // tvm-ffi-stubgen(end)
+
+/// One index of [`Expr::subscript`]: an expression, or a `start:stop:step` slice whose missing
+/// bounds are `None`.
+#[derive(Clone)]
+pub enum Subscript {
+    Index(Expr),
+    Slice(Option<Expr>, Option<Expr>, Option<Expr>),
+}
+
+impl From<&Subscript> for Any {
+    fn from(subscript: &Subscript) -> Self {
+        match subscript {
+            Subscript::Index(index) => Any::from(index.clone()),
+            Subscript::Slice(start, stop, step) => Any::from(
+                [start, stop, step]
+                    .into_iter()
+                    .map(|bound| Any::from(bound.clone()))
+                    .collect::<Array<Any>>(),
+            ),
+        }
+    }
+}
+
+impl Expr {
+    /// `self[indices]`, as the subscript rule of its type realizes it (`ir.SubscriptExprRealize`).
+    pub fn subscript(
+        &self,
+        indices: impl IntoIterator<Item = Subscript>,
+        loc: impl Into<Location>,
+    ) -> Result<Any> {
+        let indices = indices.into_iter().map(|index| Any::from(&index)).collect::<Array<Any>>();
+        tvm_ffi::cached_global_func!("ir.SubscriptExprRealize").call_tuple((
+            self,
+            &indices,
+            &loc.into(),
+        ))
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.StagingExpr
 /// Complete: reflected fields fill [40, 40) exactly.
@@ -252,6 +297,15 @@ impl GlobalVar {
 tvm_ffi::impl_object_upcast!(GlobalVar => Expr);
 // tvm-ffi-stubgen(end)
 
+impl GlobalVar {
+    /// The global variable `name_hint`, of a missing type (`ir.GlobalVar`).
+    pub fn new(name_hint: &str, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.GlobalVar")
+            .call_tuple((String::from(name_hint), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.Tuple
 /// Complete: reflected fields fill [40, 48) exactly.
 #[repr(C)]
@@ -305,6 +359,18 @@ impl Tuple {
 
 tvm_ffi::impl_object_upcast!(Tuple => Expr);
 // tvm-ffi-stubgen(end)
+
+impl Tuple {
+    /// The tuple of `fields`, typed by the types of its fields when they are all known
+    /// (`ir.Tuple`).
+    pub fn new(
+        fields: impl IntoIterator<Item = impl Into<Expr>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let fields = fields.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("ir.Tuple").call_tuple((&fields, &loc.into()))?.try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.TupleGetItem
 /// Complete: reflected fields fill [40, 56) exactly (alignment padding [52, 56)).
@@ -360,6 +426,20 @@ impl TupleGetItem {
 
 tvm_ffi::impl_object_upcast!(TupleGetItem => Expr);
 // tvm-ffi-stubgen(end)
+
+impl TupleGetItem {
+    /// Field `index` of `tuple_value`, typed by the field type and checked against the tuple type
+    /// when it is known (`ir.TupleGetItem`).
+    pub fn from_tuple(
+        tuple_value: impl Into<Expr>,
+        index: i32,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.TupleGetItem")
+            .call_tuple((&tuple_value.into(), index, &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.TensorLoad
 /// Complete: reflected fields fill [40, 56) exactly.
@@ -420,6 +500,21 @@ impl TensorLoad {
 
 tvm_ffi::impl_object_upcast!(TensorLoad => Expr);
 // tvm-ffi-stubgen(end)
+
+impl TensorLoad {
+    /// The element of `source` at `indices`, typed by the element type of `source`
+    /// (`ir.TensorLoad`).
+    pub fn new(
+        source: impl Into<Expr>,
+        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("ir.TensorLoad")
+            .call_tuple((&source.into(), &indices, &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.Constant
 /// Complete: reflected fields fill [40, 40) exactly.
@@ -527,6 +622,15 @@ impl FloatImm {
 tvm_ffi::impl_object_upcast!(FloatImm => Expr, FloatImm => Constant);
 // tvm-ffi-stubgen(end)
 
+impl FloatImm {
+    /// The floating-point constant `value` of type `dtype`, checked to fit it (`ir.FloatImm`).
+    pub fn from_dtype(dtype: DLDataType, value: f64, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.FloatImm")
+            .call_tuple((dtype, value, &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.IntImm
 /// Complete: reflected fields fill [40, 56) exactly.
 #[repr(C)]
@@ -580,6 +684,20 @@ impl IntImm {
 
 tvm_ffi::impl_object_upcast!(IntImm => Expr, IntImm => Constant);
 // tvm-ffi-stubgen(end)
+
+impl IntImm {
+    /// The integer constant `value` of the scalar integer or boolean type `dtype`, checked to fit
+    /// it (`ir.IntImm`).
+    pub fn from_dtype(
+        dtype: DLDataType,
+        value: impl Into<BigInt>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.IntImm")
+            .call_tuple((dtype, value.into(), &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.GenericConst
 /// Complete: reflected fields fill [40, 56) exactly.
@@ -635,6 +753,20 @@ impl GenericConst {
 tvm_ffi::impl_object_upcast!(GenericConst => Expr, GenericConst => Constant);
 // tvm-ffi-stubgen(end)
 
+impl GenericConst {
+    /// The constant `value` of type `ty`, checked to have a type and not to be a primitive literal
+    /// (`ir.GenericConst`).
+    pub fn checked(
+        ty: impl Into<Type>,
+        value: impl Into<Any>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.GenericConst")
+            .call_tuple((&ty.into(), value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.DataTypeImm
 /// Complete: reflected fields fill [40, 48) exactly (alignment padding [44, 48)).
 #[repr(C)]
@@ -689,6 +821,14 @@ impl DataTypeImm {
 tvm_ffi::impl_object_upcast!(DataTypeImm => Expr, DataTypeImm => Constant);
 // tvm-ffi-stubgen(end)
 
+impl DataTypeImm {
+    /// The data type `value` as a constant of type [`AnyType`](crate::ir::AnyType)
+    /// (`ir.DataTypeImm`).
+    pub fn from_dtype(value: DLDataType, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.DataTypeImm").call_tuple((value, &loc.into()))?.try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.StringImm
 /// Complete: reflected fields fill [40, 56) exactly.
 #[repr(C)]
@@ -742,6 +882,16 @@ impl StringImm {
 
 tvm_ffi::impl_object_upcast!(StringImm => Expr, StringImm => Constant);
 // tvm-ffi-stubgen(end)
+
+impl StringImm {
+    /// The string constant `value`, of type [`StringType`](crate::ir::StringType)
+    /// (`ir.StringImm`).
+    pub fn new(value: &str, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.StringImm")
+            .call_tuple((String::from(value), &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.Call
 /// Complete: reflected fields fill [40, 72) exactly.
@@ -814,6 +964,45 @@ impl Call {
 tvm_ffi::impl_object_upcast!(Call => Expr);
 // tvm-ffi-stubgen(end)
 
+impl Call {
+    /// The call of `op` on `args`, of type `ty` or the type the operator infers when `None`
+    /// (`ir.Call`).
+    pub fn new(
+        ty: Option<&Type>,
+        op: impl Into<Expr>,
+        args: impl IntoIterator<Item = impl Into<Expr>>,
+        attrs: Option<&Attrs>,
+        ty_args: impl IntoIterator<Item = impl Into<Type>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let (ty, op, attrs, loc) = (ty.cloned(), op.into(), attrs.cloned(), loc.into());
+        let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let ty_args = ty_args.into_iter().map(Into::into).collect::<Array<Type>>();
+        tvm_ffi::cached_global_func!("ir.Call")
+            .call_packed(&[
+                AnyView::from(&ty),
+                AnyView::from(&op),
+                AnyView::from(&args),
+                AnyView::from(&attrs),
+                AnyView::from(&ty_args),
+                AnyView::from(&loc),
+            ])?
+            .try_into()
+    }
+
+    /// Check the call against the contract its operator registered (`ir.CallValidate`).
+    pub fn validate(&self) -> Result<()> {
+        tvm_ffi::cached_global_func!("ir.CallValidate").call_tuple((self,))?;
+        Ok(())
+    }
+
+    /// The result type the operator infers from the current inputs, without changing the call
+    /// (`ir.CallReinferType`).
+    pub fn reinfer_type(&self) -> Result<Type> {
+        tvm_ffi::cached_global_func!("ir.CallReinferType").call_tuple((self,))?.try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.TensorRegion
 /// Complete: reflected fields fill [40, 56) exactly.
 #[repr(C)]
@@ -869,6 +1058,8 @@ impl TensorRegion {
 tvm_ffi::impl_object_upcast!(TensorRegion => Expr);
 // tvm-ffi-stubgen(end)
 
+// `ir.TensorRegion` stores its arguments as given: the generated `TensorRegion::new` is the same.
+
 // tvm-ffi-stubgen(begin): object/ir.Var
 /// Complete: reflected fields fill [40, 56) exactly.
 #[repr(C)]
@@ -921,6 +1112,15 @@ impl Var {
 
 tvm_ffi::impl_object_upcast!(Var => Expr);
 // tvm-ffi-stubgen(end)
+
+impl Var {
+    /// The variable `name`, of type `ty` or a missing type when `None` (`ir.Var`).
+    pub fn new(name: &str, ty: Option<&Type>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.Var")
+            .call_tuple((String::from(name), ty.cloned(), &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.LambdaExpr
 /// Complete: reflected fields fill [40, 56) exactly.
@@ -977,6 +1177,28 @@ impl LambdaExpr {
 tvm_ffi::impl_object_upcast!(LambdaExpr => Expr, LambdaExpr => StagingExpr);
 // tvm-ffi-stubgen(end)
 
+impl LambdaExpr {
+    /// The lambda of `vars` that evaluates to `body` (`ir.LambdaExpr`).
+    pub fn new(
+        vars: impl IntoIterator<Item = impl Into<Var>>,
+        body: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let vars = vars.into_iter().map(Into::into).collect::<Array<Var>>();
+        tvm_ffi::cached_global_func!("ir.LambdaExpr")
+            .call_tuple((&vars, &body.into(), &loc.into()))?
+            .try_into()
+    }
+
+    /// The body with `arguments` substituted for the variables (`ir.LambdaExprApply`).
+    pub fn apply(&self, arguments: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Expr> {
+        let arguments = arguments.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("ir.LambdaExprApply")
+            .call_tuple((self, &arguments))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.Range
 /// Complete: reflected fields fill [24, 48) exactly.
 #[repr(C)]
@@ -1023,3 +1245,35 @@ impl Range {
     }
 }
 // tvm-ffi-stubgen(end)
+
+impl Range {
+    /// The range `[begin, end)`, or `[0, begin)` when `end` is `None` (`ir.Range`).
+    pub fn new(
+        begin: impl Into<Expr>,
+        end: Option<&Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.Range")
+            .call_tuple((&begin.into(), end.cloned(), &loc.into()))?
+            .try_into()
+    }
+
+    /// The range of `extent` values from `min_value` (`ir.RangeFromMinExtent`).
+    pub fn from_min_extent(
+        min_value: impl Into<Expr>,
+        extent: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.RangeFromMinExtent")
+            .call_tuple((&min_value.into(), &extent.into(), &loc.into()))?
+            .try_into()
+    }
+
+    /// The extent `end - begin` of the range `[begin, end)`, simplified
+    /// (`ir.RangeGetExtentFromBeginEnd`).
+    pub fn get_extent_from_begin_end(begin: impl Into<Expr>, end: impl Into<Expr>) -> Result<Expr> {
+        tvm_ffi::cached_global_func!("ir.RangeGetExtentFromBeginEnd")
+            .call_tuple((&begin.into(), &end.into()))?
+            .try_into()
+    }
+}

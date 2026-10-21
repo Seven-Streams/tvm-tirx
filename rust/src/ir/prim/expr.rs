@@ -22,7 +22,8 @@
 //! and `Let`.
 //!
 //! The objects `python/tvm_tirx/ir/prim/expr.py` defines. A binary operation such as [`Add`]
-//! holds its operands `a` and `b`.
+//! holds its operands `a` and `b`. Their `new` is the native constructor, which checks the operand
+//! types and derives the result type; the type-promoting operators are in [`super::op`].
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (operand type
 // checks and the derived result type); the generated `from_complete_fields` allocates the fields as
@@ -54,15 +55,21 @@
 // tvm-ffi-stubgen(custom-new): prim.Not
 // tvm-ffi-stubgen(custom-new): prim.Select
 // tvm-ffi-stubgen(custom-new): prim.Let
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
+use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use std::ops::Deref;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/prim.Cast
@@ -1566,3 +1573,259 @@ impl Let {
 
 tvm_ffi::impl_object_upcast!(Let => Expr);
 // tvm-ffi-stubgen(end)
+
+impl Cast {
+    /// The node converting `value` to `ty`, which has as many lanes as `value` (`prim.Cast`).
+    pub fn new(
+        ty: impl Into<PrimType>,
+        value: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Cast")
+            .call_tuple((&ty.into(), &value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl LShift {
+    /// The node `a << b` over integer operands of the same type (`prim.LShift`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.LShift")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl RShift {
+    /// The node `a >> b` over integer operands of the same type (`prim.RShift`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.RShift")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl BitwiseAnd {
+    /// The node `a & b` over integer or boolean operands of the same type (`prim.BitwiseAnd`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.BitwiseAnd")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl BitwiseOr {
+    /// The node `a | b` over integer or boolean operands of the same type (`prim.BitwiseOr`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.BitwiseOr")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl BitwiseXor {
+    /// The node `a ^ b` over integer or boolean operands of the same type (`prim.BitwiseXor`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.BitwiseXor")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Add {
+    /// The node `a + b` over operands of the same type (`prim.Add`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Add")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Sub {
+    /// The node `a - b` over operands of the same type (`prim.Sub`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Sub")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Mul {
+    /// The node `a * b` over operands of the same type (`prim.Mul`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Mul")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Div {
+    /// The node `a / b` over operands of the same type (`prim.Div`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Div")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Mod {
+    /// The node `a % b`, truncated, over operands of the same type (`prim.Mod`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Mod")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl FloorDiv {
+    /// The node `floor(a / b)` over operands of the same type (`prim.FloorDiv`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.FloorDiv")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl FloorMod {
+    /// The node `a - floor(a / b) * b` over operands of the same type (`prim.FloorMod`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.FloorMod")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Min {
+    /// The node `min(a, b)` over operands of the same type (`prim.Min`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Min")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Max {
+    /// The node `max(a, b)` over operands of the same type (`prim.Max`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Max")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl EQ {
+    /// The node the boolean `a == b` over operands of the same type (`prim.EQ`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.EQ")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl NE {
+    /// The node the boolean `a != b` over operands of the same type (`prim.NE`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.NE")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl LT {
+    /// The node the boolean `a < b` over operands of the same type (`prim.LT`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.LT")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl LE {
+    /// The node the boolean `a <= b` over operands of the same type (`prim.LE`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.LE")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl GT {
+    /// The node the boolean `a > b` over operands of the same type (`prim.GT`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.GT")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl GE {
+    /// The node the boolean `a >= b` over operands of the same type (`prim.GE`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.GE")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl And {
+    /// The node the boolean `a && b` over boolean operands (`prim.And`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.And")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Or {
+    /// The node the boolean `a || b` over boolean operands (`prim.Or`).
+    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Or")
+            .call_tuple((&a.into(), &b.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl BitwiseNot {
+    /// The node `~a` over an integer or boolean operand (`prim.BitwiseNot`).
+    pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.BitwiseNot")
+            .call_tuple((&a.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Not {
+    /// The node the boolean `!a` over a boolean operand (`prim.Not`).
+    pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Not").call_tuple((&a.into(), &loc.into()))?.try_into()
+    }
+}
+
+impl Select {
+    /// The node choosing `true_value` where `condition` holds and `false_value` elsewhere, which
+    /// evaluates both (`prim.Select`).
+    pub fn new(
+        condition: impl Into<Expr>,
+        true_value: impl Into<Expr>,
+        false_value: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Select")
+            .call_tuple((&condition.into(), &true_value.into(), &false_value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
+impl Let {
+    /// The node binding `var` to `value` in `body` (`prim.Let`).
+    pub fn new(
+        var: impl Into<Var>,
+        value: impl Into<Expr>,
+        body: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("prim.Let")
+            .call_tuple((&var.into(), &value.into(), &body.into(), &loc.into()))?
+            .try_into()
+    }
+}

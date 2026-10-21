@@ -21,7 +21,8 @@
 //! Types: primitive, pointer, tuple, function and the special types.
 //!
 //! The objects `python/tvm_tirx/ir/type.py` defines. [`Type`] is the base of every type; a dialect
-//! extends it, as [`TensorType`](crate::tirx::TensorType) does.
+//! extends it, as [`TensorType`](crate::tirx::TensorType) does. The native constructors are `new`,
+//! `instance` for the shared types and [`PrimType::from_dtype`].
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (defaults, the
 // shared `MissingType` instance); the generated `from_complete_fields` allocates the fields as
@@ -30,6 +31,9 @@
 // tvm-ffi-stubgen(custom-new): ir.PtrType
 // tvm-ffi-stubgen(custom-new): ir.TupleType
 // tvm-ffi-stubgen(custom-new): ir.FuncType
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::location::Location;
@@ -39,6 +43,7 @@ use tvm_ffi::Array;
 use tvm_ffi::DLDataType;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/ir.Type
@@ -138,6 +143,13 @@ impl MissingType {
 tvm_ffi::impl_object_upcast!(MissingType => Type);
 // tvm-ffi-stubgen(end)
 
+impl MissingType {
+    /// The shared type of a node whose type is not known yet (`ir.MissingType`).
+    pub fn new() -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.MissingType").call_tuple(())?.try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.NoneType
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -190,6 +202,13 @@ impl NoneType {
 
 tvm_ffi::impl_object_upcast!(NoneType => Type);
 // tvm-ffi-stubgen(end)
+
+impl NoneType {
+    /// The shared type of the `None` value (`ir.NoneType`).
+    pub fn instance() -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.NoneType").call_tuple(())?.try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.AnyType
 /// Complete: reflected fields fill [32, 32) exactly.
@@ -244,6 +263,8 @@ impl AnyType {
 tvm_ffi::impl_object_upcast!(AnyType => Type);
 // tvm-ffi-stubgen(end)
 
+// `ir.AnyType` stores its location as given: the generated `AnyType::new` is the same.
+
 // tvm-ffi-stubgen(begin): object/ir.TensorRegionType
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -297,6 +318,13 @@ impl TensorRegionType {
 tvm_ffi::impl_object_upcast!(TensorRegionType => Type);
 // tvm-ffi-stubgen(end)
 
+impl TensorRegionType {
+    /// The shared type of a tensor region (`ir.TensorRegionType`).
+    pub fn instance() -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.TensorRegionType").call_tuple(())?.try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.OpaqueType
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -349,6 +377,9 @@ impl OpaqueType {
 
 tvm_ffi::impl_object_upcast!(OpaqueType => Type);
 // tvm-ffi-stubgen(end)
+
+// `ir.OpaqueType` allocates a fresh type at the unknown location: the generated
+// `OpaqueType::new(Location::unknown()?)` is the same.
 
 // tvm-ffi-stubgen(begin): object/ir.PrimType
 /// Complete: reflected fields fill [32, 40) exactly (alignment padding [36, 40)).
@@ -404,6 +435,14 @@ impl PrimType {
 tvm_ffi::impl_object_upcast!(PrimType => Type);
 // tvm-ffi-stubgen(end)
 
+impl PrimType {
+    /// The primitive type of `dtype`, shared for the common scalars and checked to be a valid
+    /// primitive type (`ir.PrimType`).
+    pub fn from_dtype(dtype: DLDataType) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.PrimType").call_tuple((dtype,))?.try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.StringType
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -456,6 +495,9 @@ impl StringType {
 
 tvm_ffi::impl_object_upcast!(StringType => Type);
 // tvm-ffi-stubgen(end)
+
+// `ir.StringType` allocates a fresh type at the unknown location: the generated
+// `StringType::new(Location::unknown()?)` is the same.
 
 // tvm-ffi-stubgen(begin): object/ir.PtrType
 /// Complete: reflected fields fill [32, 48) exactly.
@@ -512,6 +554,16 @@ impl PtrType {
 tvm_ffi::impl_object_upcast!(PtrType => Type);
 // tvm-ffi-stubgen(end)
 
+impl PtrType {
+    /// A pointer to `element_type` in the memory `scope`; the element type must not be missing
+    /// (`ir.PtrType`).
+    pub fn new(element_type: impl Into<Type>, scope: &MemoryScope) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.PtrType")
+            .call_tuple((&element_type.into(), scope))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.TupleType
 /// Complete: reflected fields fill [32, 40) exactly.
 #[repr(C)]
@@ -565,6 +617,17 @@ impl TupleType {
 
 tvm_ffi::impl_object_upcast!(TupleType => Type);
 // tvm-ffi-stubgen(end)
+
+impl TupleType {
+    /// The type of a tuple of `fields` (`ir.TupleType`).
+    pub fn new(
+        fields: impl IntoIterator<Item = impl Into<Type>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let fields = fields.into_iter().map(Into::into).collect::<Array<Type>>();
+        tvm_ffi::cached_global_func!("ir.TupleType").call_tuple((&fields, &loc.into()))?.try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.FuncType
 /// Complete: reflected fields fill [32, 48) exactly.
@@ -620,3 +683,16 @@ impl FuncType {
 
 tvm_ffi::impl_object_upcast!(FuncType => Type);
 // tvm-ffi-stubgen(end)
+
+impl FuncType {
+    /// The type of a function from `arg_types` to `ret_type` (`ir.FuncType`).
+    pub fn new(
+        arg_types: impl IntoIterator<Item = impl Into<Type>>,
+        ret_type: impl Into<Type>,
+    ) -> Result<Self> {
+        let arg_types = arg_types.into_iter().map(Into::into).collect::<Array<Type>>();
+        tvm_ffi::cached_global_func!("ir.FuncType")
+            .call_tuple((&arg_types, &ret_type.into()))?
+            .try_into()
+    }
+}

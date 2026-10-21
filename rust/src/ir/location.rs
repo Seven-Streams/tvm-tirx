@@ -22,16 +22,20 @@
 //!
 //! The objects `python/tvm_tirx/ir/location.py` defines. A [`Location`] is an [`UnknownLoc`], a
 //! [`SourceLoc`] (a span in a [`SourceName`]), or a [`CallSiteLoc`] (a callee location seen from a
-//! caller).
+//! caller). [`Location::unknown`] and [`SourceName::get`] wrap the native constructors.
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (the shared
 // `UnknownLoc` instance); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): ir.UnknownLoc
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use std::ops::Deref;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
@@ -79,6 +83,13 @@ impl SourceName {
     }
 }
 // tvm-ffi-stubgen(end)
+
+impl SourceName {
+    /// The source name `name`, interned so that equal names share one object (`ir.SourceName`).
+    pub fn get(name: &str) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.SourceName").call_tuple((String::from(name),))?.try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.Location
 /// Complete: reflected fields fill [24, 24) exactly.
@@ -176,6 +187,20 @@ impl UnknownLoc {
 tvm_ffi::impl_object_upcast!(UnknownLoc => Location);
 // tvm-ffi-stubgen(end)
 
+impl UnknownLoc {
+    /// The shared unknown location (`ir.UnknownLoc`), which IR constructors default to.
+    pub fn new() -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.UnknownLoc").call_tuple(())?.try_into()
+    }
+}
+
+impl Location {
+    /// The shared [`UnknownLoc`], as a [`Location`]: Python's `UNKNOWN_LOC`.
+    pub fn unknown() -> Result<Self> {
+        UnknownLoc::new().map(Self::from)
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.SourceLoc
 /// Complete: reflected fields fill [24, 48) exactly.
 #[repr(C)]
@@ -246,6 +271,8 @@ impl SourceLoc {
 tvm_ffi::impl_object_upcast!(SourceLoc => Location);
 // tvm-ffi-stubgen(end)
 
+// `ir.SourceLoc` stores its arguments as given: the generated `SourceLoc::new` is the same.
+
 // tvm-ffi-stubgen(begin): object/ir.CallSiteLoc
 /// Complete: reflected fields fill [24, 40) exactly.
 #[repr(C)]
@@ -300,3 +327,5 @@ impl CallSiteLoc {
 
 tvm_ffi::impl_object_upcast!(CallSiteLoc => Location);
 // tvm-ffi-stubgen(end)
+
+// `ir.CallSiteLoc` stores its arguments as given: the generated `CallSiteLoc::new` is the same.

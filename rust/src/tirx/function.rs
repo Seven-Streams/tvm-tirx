@@ -21,11 +21,16 @@
 //! Tensor functions.
 //!
 //! The objects `python/tvm_tirx/tirx/function.py` defines. A [`Function`] is a
-//! [`BaseFunc`] with parameters, a return type and an optional body.
+//! [`BaseFunc`] with parameters, a return type and an optional body, built with [`Function::new`];
+//! [`renew_def`] gives its variables fresh definitions.
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (`ty` derived from
 // the signature); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): tirx.Function
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
@@ -39,6 +44,7 @@ use crate::ir::stmt::SeqStmt;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/tirx.Function
@@ -110,3 +116,26 @@ impl Function {
 
 tvm_ffi::impl_object_upcast!(Function => Expr, Function => BaseFunc);
 // tvm-ffi-stubgen(end)
+
+impl Function {
+    /// The function of `params`, `body`, `ret_type` and `attrs`, its type derived from the
+    /// signature; a missing return type becomes void (`tirx.Function`).
+    pub fn new(
+        params: impl IntoIterator<Item = impl Into<Var>>,
+        body: Option<&SeqStmt>,
+        ret_type: impl Into<Type>,
+        attrs: impl Into<DictAttrs>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let params = params.into_iter().map(Into::into).collect::<Array<Var>>();
+        let (ret_type, attrs, loc) = (ret_type.into(), attrs.into(), loc.into());
+        tvm_ffi::cached_global_func!("tirx.Function")
+            .call_tuple((&params, body.cloned(), &ret_type, &attrs, &loc))?
+            .try_into()
+    }
+}
+
+/// `func` with fresh variable definitions, their uses remapped (`tirx.RenewDef`).
+pub fn renew_def(func: impl Into<Function>) -> Result<Function> {
+    tvm_ffi::cached_global_func!("tirx.RenewDef").call_tuple((&func.into(),))?.try_into()
+}

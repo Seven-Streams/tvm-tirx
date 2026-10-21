@@ -22,22 +22,32 @@
 //!
 //! The objects `python/tvm_tirx/tirx/tile/dispatch.py` defines. A [`DispatchContext`] gives a
 //! lowering the target, the thread scope, the launch parameters, the ranges of the variables, the
-//! callbacks and the state shared between dispatches.
+//! callbacks and the state shared between dispatches. Its methods request allocations and
+//! statements from the lowering, and cache objects across dispatches.
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::stmt::Stmt
+// tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCast
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
+use crate::ir::stmt::Stmt;
 use crate::target::Target;
 use crate::tirx::thread_scope::ThreadScope;
 use std::ops::Deref;
 use tvm_ffi::Any;
+use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectCore;
+use tvm_ffi::ObjectRefCast;
 use tvm_ffi::Result;
 use tvm_ffi::String;
 use tvm_ffi::object::ObjectRef;
@@ -108,3 +118,111 @@ impl DispatchContextObj {
     }
 }
 // tvm-ffi-stubgen(end)
+
+impl DispatchContext {
+    /// The context of a dispatch for `target` at `thread_scope` (`tirx.DispatchContext`).
+    ///
+    /// `launch_params` maps each launch parameter name to its variable and extent, `inter` and
+    /// `intra` each axis to its `[extent, offset]` across and within teams, and `scope_kind` names
+    /// the backend execution scope, such as CUDA's `warp`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target: impl Into<Target>,
+        thread_scope: impl Into<ThreadScope>,
+        launch_params: impl IntoIterator<Item = (impl AsRef<str>, Var, Expr)>,
+        var_range_map: &Map<Var, Range>,
+        alloc_only: bool,
+        callbacks: &Map<String, ObjectRef>,
+        shared_state: &Map<String, ObjectRef>,
+        inter: &Map<String, Array<Expr>>,
+        intra: &Map<String, Array<Expr>>,
+        scope_kind: &str,
+    ) -> Result<Self> {
+        let (target, thread_scope) = (target.into(), thread_scope.into());
+        let launch_params = launch_params
+            .into_iter()
+            .map(|(name, var, extent)| {
+                (String::from(name), Array::new(vec![Any::from(var), Any::from(extent)]))
+            })
+            .collect::<Map<String, Array<Any>>>();
+        let scope_kind = String::from(scope_kind);
+        tvm_ffi::cached_global_func!("tirx.DispatchContext")
+            .call_packed(&[
+                AnyView::from(&target),
+                AnyView::from(&thread_scope),
+                AnyView::from(&launch_params),
+                AnyView::from(var_range_map),
+                AnyView::from(&alloc_only),
+                AnyView::from(callbacks),
+                AnyView::from(shared_state),
+                AnyView::from(inter),
+                AnyView::from(intra),
+                AnyView::from(&scope_kind),
+            ])?
+            .try_into()
+    }
+
+    /// Request the allocation of the tensor variable `tensor`, placed at `allocated_addr` and
+    /// annotated with `annotations`; only while `alloc_only` (`tirx.DispatchContextAddAllocTensor`).
+    pub fn add_alloc_tensor(
+        &self,
+        tensor: impl Into<Var>,
+        allocated_addr: impl IntoIterator<Item = impl Into<Expr>>,
+        annotations: &Map<String, Any>,
+    ) -> Result<()> {
+        let tensor = tensor.into();
+        let allocated_addr = allocated_addr.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("tirx.DispatchContextAddAllocTensor").call_tuple((
+            self,
+            &tensor,
+            &allocated_addr,
+            annotations,
+        ))?;
+        Ok(())
+    }
+
+    /// Request `stmt` at the start of the host code if `host`, else of the kernel
+    /// (`tirx.DispatchContextAddInitStmt`).
+    pub fn add_init_stmt(&self, stmt: impl Into<Stmt>, host: bool) -> Result<()> {
+        tvm_ffi::cached_global_func!("tirx.DispatchContextAddInitStmt").call_tuple((
+            self,
+            &stmt.into(),
+            host,
+        ))?;
+        Ok(())
+    }
+
+    /// Request `stmt` right after the definition of the tensor variable `tensor`
+    /// (`tirx.DispatchContextAddPostTensorDefStmt`).
+    pub fn add_post_tensor_def_stmt(
+        &self,
+        tensor: impl Into<Var>,
+        stmt: impl Into<Stmt>,
+    ) -> Result<()> {
+        tvm_ffi::cached_global_func!("tirx.DispatchContextAddPostTensorDefStmt").call_tuple((
+            self,
+            &tensor.into(),
+            &stmt.into(),
+        ))?;
+        Ok(())
+    }
+
+    /// The object cached under `key` across dispatches, if any
+    /// (`tirx.DispatchContextSharedStateGet`).
+    pub fn cache_get(&self, key: &str) -> Result<Option<ObjectRef>> {
+        tvm_ffi::cached_global_func!("tirx.DispatchContextSharedStateGet")
+            .call_tuple((self, String::from(key)))?
+            .try_into()
+    }
+
+    /// Cache `value` under `key` across dispatches (`tirx.DispatchContextSharedStateSet`).
+    pub fn cache_set(&self, key: &str, value: &impl ObjectRefCast) -> Result<()> {
+        let key = String::from(key);
+        tvm_ffi::cached_global_func!("tirx.DispatchContextSharedStateSet").call_packed(&[
+            AnyView::from(self),
+            AnyView::from(&key),
+            AnyView::from(value),
+        ])?;
+        Ok(())
+    }
+}

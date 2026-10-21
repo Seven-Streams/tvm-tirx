@@ -21,12 +21,19 @@
 //! A supply of unique names, for building and rewriting IR.
 //!
 //! The objects `python/tvm_tirx/ir/unique_name_supply.py` defines. A [`UniqueNameSupply`] is
-//! opaque: it is used through the native `ir.UniqueNameSupply*` functions.
+//! opaque: it is used through its methods, which wrap the native `ir.UniqueNameSupply*` functions.
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): tvm_ffi::String
 
 // tvm-ffi-stubgen(begin): import-section
 use std::ops::Deref;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
+use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/ir.UniqueNameSupply
@@ -52,3 +59,37 @@ impl Deref for UniqueNameSupply {
     }
 }
 // tvm-ffi-stubgen(end)
+
+impl UniqueNameSupply {
+    /// An empty supply whose names start with `prefix` (`ir.UniqueNameSupply`).
+    pub fn new(prefix: &str) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.UniqueNameSupply")
+            .call_tuple((String::from(prefix),))?
+            .try_into()
+    }
+
+    /// A name derived from `name` that the supply has not given out, now reserved; `add_prefix`
+    /// prepends the prefix and `add_underscore` puts `_` before the numeric suffix
+    /// (`ir.UniqueNameSupplyFreshName`).
+    pub fn fresh_name(&self, name: &str, add_prefix: bool, add_underscore: bool) -> Result<String> {
+        tvm_ffi::cached_global_func!("ir.UniqueNameSupplyFreshName")
+            .call_tuple((self, String::from(name), add_prefix, add_underscore))?
+            .try_into()
+    }
+
+    /// Reserve `name`, with the prefix if `add_prefix`, and return the reserved name
+    /// (`ir.UniqueNameSupplyReserveName`).
+    pub fn reserve_name(&self, name: &str, add_prefix: bool) -> Result<String> {
+        tvm_ffi::cached_global_func!("ir.UniqueNameSupplyReserveName")
+            .call_tuple((self, String::from(name), add_prefix))?
+            .try_into()
+    }
+
+    /// Whether the supply has given out or reserved `name`, with the prefix if `add_prefix`
+    /// (`ir.UniqueNameSupplyContainsName`).
+    pub fn contains_name(&self, name: &str, add_prefix: bool) -> Result<bool> {
+        tvm_ffi::cached_global_func!("ir.UniqueNameSupplyContainsName")
+            .call_tuple((self, String::from(name), add_prefix))?
+            .try_into()
+    }
+}

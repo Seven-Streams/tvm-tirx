@@ -20,9 +20,9 @@
 
 //! Operators: the registry entry [`Op`], its [`ArgumentInfo`], and its attribute columns.
 //!
-//! The objects `python/tvm_tirx/ir/op.py` defines. [`Op::get`] looks up a registered operator, and
+//! The objects `python/tvm_tirx/ir/op.py` defines. [`Op::get`] looks up a registered operator,
 //! [`Op::attr_map`] reads an attribute column as an [`OpAttrMap`], which also sees the values
-//! registered after it was read.
+//! registered after it was read, and [`Op::register`] registers a new operator.
 
 // `ir.Op` has three unreflected members, so its complete layout is hand-written below.
 // tvm-ffi-stubgen(ty-map): ir.Op -> crate::ir::op::Op
@@ -176,19 +176,18 @@ impl OpObj {
 }
 
 impl Op {
-    /// Return the registry singleton named `name`.
+    /// The registered operator `name`, a registry singleton (`ir.GetOp`).
     pub fn get(name: &str) -> Result<Self> {
         tvm_ffi::cached_global_func!("ir.GetOp").call_tuple((String::from(name),))?.try_into()
     }
 
-    /// `Op::HasAttrMap(name)`: whether any operator registered the attribute column `name`.
+    /// Whether any operator registered the attribute `name`, as `Op::HasAttrMap` (`ir.ListOpAttrNames`).
     pub fn has_attr_map(name: &str) -> Result<bool> {
-        let names: Array<String> =
-            tvm_ffi::cached_global_func!("ir.ListOpAttrNames").call_packed(&[])?.try_into()?;
-        Ok(names.iter().any(|column| column.as_str() == name))
+        Ok(Self::list_attr_names()?.iter().any(|column| column.as_str() == name))
     }
 
-    /// `Op::GetAttrMap<T>(name)`: the live column, or `None` when no operator registered it.
+    /// The live attribute column `name`, as `Op::GetAttrMap<T>`, or `None` when no operator
+    /// registered it (`ir.GetOpAttrColumn`).
     pub fn attr_map<T: tvm_ffi::type_traits::AnyCompatible>(
         name: &str,
     ) -> Result<Option<OpAttrMap<T>>> {
@@ -209,6 +208,24 @@ impl Op {
             name: String::from(name),
             _value: std::marker::PhantomData,
         }))
+    }
+
+    /// The names of the registered operators (`ir.ListOpNames`).
+    pub fn list_op_names() -> Result<Array<String>> {
+        tvm_ffi::cached_global_func!("ir.ListOpNames").call_tuple(())?.try_into()
+    }
+
+    /// The names of the attributes any operator registered (`ir.ListOpAttrNames`).
+    pub fn list_attr_names() -> Result<Array<String>> {
+        tvm_ffi::cached_global_func!("ir.ListOpAttrNames").call_tuple(())?.try_into()
+    }
+
+    /// Register a new operator `name` with the documentation `doc`; fails if `name` is already
+    /// registered (`ir.RegisterOp`).
+    pub fn register(name: &str, doc: &str) -> Result<()> {
+        tvm_ffi::cached_global_func!("ir.RegisterOp")
+            .call_tuple((String::from(name), String::from(doc)))?;
+        Ok(())
     }
 }
 

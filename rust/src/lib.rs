@@ -30,22 +30,24 @@
 //! - [`sym`]: symbolic analysis: the analyzer, integer sets and iterator maps.
 //! - [`target`]: compilation targets and target kinds.
 //! - [`backend`]: backend-specific objects, such as the attributes of CUDA instructions.
-//! - [`runtime`]: the runtime objects the IR refers to.
+//! - [`runtime`]: the runtime objects the IR refers to, tensor allocation and runtime queries.
+//! - [`codegen`]: compilation of IR modules into runtime modules, and the LLVM backend queries.
+//! - [`script`]: printing IR objects as TVMScript.
 //!
 //! # Using the bindings
 //!
 //! Load `libtvm_tirx_compiler` before using these types, so that their type keys are registered,
-//! and keep the module alive while its objects are in use. Native functions that have no Rust
-//! wrapper are called through [`tvm_ffi::Function::get_global`]. From `rust/` on Linux:
+//! and keep the module alive while its objects are in use. The native global functions have Rust
+//! wrappers, as methods of the handle types and as functions of the modules, such as
+//! [`target::Target::new`] for `target.Target`. Native functions that have no Rust wrapper are
+//! called through [`tvm_ffi::Function::get_global`]. From `rust/` on Linux:
 //!
 //! ```no_run
 //! use tvm_tirx::target::Target;
-//! use tvm_tirx::tvm_ffi::{Function, Module, String as FfiString};
+//! use tvm_tirx::tvm_ffi::Module;
 //!
 //! let _compiler = Module::load_from_file("../build/lib/libtvm_tirx_compiler.so")?;
-//! let target: Target = Function::get_global("target.Target")?
-//!     .call_tuple((FfiString::from("llvm"),))?
-//!     .try_into()?;
+//! let target = Target::new("llvm")?;
 //! assert_eq!(target.kind()?.name()?.as_str(), "llvm");
 //! # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
 //! ```
@@ -105,10 +107,38 @@
 //!
 //! The tests load `build/lib/libtvm_tirx_compiler.so`; set `TVM_TIRX_COMPILER_LIBRARY` to load
 //! another library.
+//!
+//! The tests are laid out like the modules. Each top-level module is one test binary,
+//! `tests/<module>/main.rs`, and the tests of `src/<path>.rs` are in `tests/<path>.rs`:
+//! `tests/tirx/transform/function_pass.rs` tests `src/tirx/transform/function_pass.rs`. Run the
+//! tests of one module with `--test <module>`, such as `--test tirx`. `tests/common/` holds the
+//! helpers the binaries share.
+
+/// Makes a scope guard neither `Send` nor `Sync`: the native scopes keep their state per thread,
+/// or in an object that is not synchronized, so a scope must end on the thread that opened it.
+pub(crate) type ThreadBound = std::marker::PhantomData<*const ()>;
+
+/// Calls a native exit function when dropped: the end of a scope a native enter function opened.
+pub(crate) struct ExitOnDrop(tvm_ffi::Function, ThreadBound);
+
+impl ExitOnDrop {
+    pub(crate) fn new(exit: tvm_ffi::Function) -> Self {
+        Self(exit, ThreadBound::default())
+    }
+}
+
+impl Drop for ExitOnDrop {
+    fn drop(&mut self) {
+        // A destructor cannot report the error, and the native exit functions do not fail.
+        let _ = self.0.call_packed(&[]);
+    }
+}
 
 pub mod backend;
+pub mod codegen;
 pub mod ir;
 pub mod runtime;
+pub mod script;
 pub mod sym;
 pub mod target;
 pub mod tirx;

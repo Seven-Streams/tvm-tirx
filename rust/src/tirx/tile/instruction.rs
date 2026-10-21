@@ -22,19 +22,33 @@
 //!
 //! The objects `python/tvm_tirx/tirx/tile/instruction.py` registers. Their type keys are
 //! `tirx.tensor.*`. [`ScopeAttrs`] holds the thread scope of an instruction, and [`TrnAttrs`] the
-//! scope and options of a Trainium (`trn`) instruction.
+//! scope and options of a Trainium (`trn`) instruction. [`configure_tensor_instruction`] installs
+//! the validator of a tile instruction operator.
 
 // Every object registered under `tirx.tensor` has its block in this file.
 // tvm-ffi-stubgen(prefix): tirx.tensor
 
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Call
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
+// tvm-ffi-stubgen(import-object): crate::ir::expr::TensorRegion
+// tvm-ffi-stubgen(import-object): crate::ir::op::Op
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
 use crate::ir::attrs::AttrsObj;
+use crate::ir::expr::Call;
+use crate::ir::expr::Expr;
+use crate::ir::expr::TensorRegion;
+use crate::ir::op::Op;
 use crate::tirx::thread_scope::ThreadScope;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::Optional;
+use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
@@ -183,3 +197,25 @@ impl TrnAttrs {
 
 tvm_ffi::impl_object_upcast!(TrnAttrs => Attrs);
 // tvm-ffi-stubgen(end)
+
+/// The tensor region `value` covers: a `TensorLoad` converted, a `TensorRegion` as is
+/// (`tirx.AsTensorRegion`).
+pub fn as_tensor_region(value: impl Into<Expr>) -> Result<TensorRegion> {
+    tvm_ffi::cached_global_func!("tirx.AsTensorRegion").call_tuple((&value.into(),))?.try_into()
+}
+
+/// Validate the calls of the tile instruction `op` with `validator`, after the checks of its
+/// operand count, void type and registered attributes (`tirx.ConfigureTensorInstruction`).
+///
+/// An operator takes a custom validator once; `validator` reports an invalid call as an error.
+/// The operator registry keeps it for the process and calls it from any thread, so it is
+/// `Send + Sync`.
+pub fn configure_tensor_instruction(
+    op: impl Into<Op>,
+    validator: impl Fn(Call) -> Result<()> + Send + Sync + 'static,
+) -> Result<()> {
+    let validator = tvm_ffi::Function::from_typed(validator);
+    tvm_ffi::cached_global_func!("tirx.ConfigureTensorInstruction")
+        .call_tuple((&op.into(), &validator))?;
+    Ok(())
+}

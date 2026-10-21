@@ -22,15 +22,27 @@
 //!
 //! The objects `python/tvm_tirx/tirx/op/__init__.py` defines. A [`CallFFIKernelAttr`] holds the
 //! launch parameters, the launch fields, the number of kernel arguments and the kernel attributes
-//! of a `call_ffi_kernel`.
+//! of a `call_ffi_kernel`. The functions build the TIRx operator calls that have a native
+//! constructor.
+
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
+// tvm-ffi-stubgen(import-object): crate::ir::location::Location
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::Type
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
 use crate::ir::attrs::AttrsObj;
+use crate::ir::expr::Expr;
+use crate::ir::location::Location;
+use crate::ir::r#type::Type;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::Map;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
@@ -101,3 +113,29 @@ impl CallFFIKernelAttr {
 
 tvm_ffi::impl_object_upcast!(CallFFIKernelAttr => Attrs);
 // tvm-ffi-stubgen(end)
+
+// The native `tirx.CallFFIKernelAttr` stores its fields as given, as the generated
+// `CallFFIKernelAttr::new` does.
+
+/// `log(exp(a) + exp(b))` of the floating-point `a` and `b` (`tirx._OpLogAddExp`).
+pub fn logaddexp(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Expr> {
+    tvm_ffi::cached_global_func!("tirx._OpLogAddExp")
+        .call_tuple((&a.into(), &b.into(), &loc.into()))?
+        .try_into()
+}
+
+/// `value` reinterpreted bit for bit as the primitive or pointer type `ty` (`tirx.reinterpret`).
+pub fn reinterpret(
+    ty: impl Into<Type>,
+    value: impl Into<Expr>,
+    loc: impl Into<Location>,
+) -> Result<Expr> {
+    tvm_ffi::cached_global_func!("tirx.reinterpret")
+        .call_tuple((&ty.into(), &value.into(), &loc.into()))?
+        .try_into()
+}
+
+/// A return from the current GPU thread, without a value (`tirx.gpu_thread_return`).
+pub fn gpu_thread_return(loc: impl Into<Location>) -> Result<Expr> {
+    tvm_ffi::cached_global_func!("tirx.gpu_thread_return").call_tuple((&loc.into(),))?.try_into()
+}

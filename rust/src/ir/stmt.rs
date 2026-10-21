@@ -21,7 +21,8 @@
 //! Statements: bindings, assertions, loops, conditionals, tensor stores and sequences.
 //!
 //! The objects `python/tvm_tirx/ir/stmt.py` defines. [`Stmt`] is the base of every statement and
-//! carries its location.
+//! carries its location. The constructors with the native semantics are `new` (`checked` for
+//! [`While`]); a body given as one statement is wrapped in a [`SeqStmt`].
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (defaults, implicit
 // conversions, validation); the generated `from_complete_fields` allocates the fields as given.
@@ -34,6 +35,10 @@
 // tvm-ffi-stubgen(custom-new): ir.If
 // tvm-ffi-stubgen(custom-new): ir.Evaluate
 // tvm-ffi-stubgen(custom-new): ir.Return
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
@@ -44,10 +49,12 @@ use crate::ir::location::Location;
 use crate::ir::op::Op;
 use std::ops::Deref;
 use tvm_ffi::Any;
+use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
 
@@ -150,6 +157,19 @@ impl Bind {
 tvm_ffi::impl_object_upcast!(Bind => Stmt);
 // tvm-ffi-stubgen(end)
 
+impl Bind {
+    /// Bind `var` to `value` for the rest of the enclosing scope (`ir.Bind`).
+    pub fn new(
+        var: impl Into<Var>,
+        value: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.Bind")
+            .call_tuple((&var.into(), &value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.AssertStmt
 /// Complete: reflected fields fill [32, 56) exactly.
 #[repr(C)]
@@ -215,6 +235,22 @@ impl AssertStmt {
 
 tvm_ffi::impl_object_upcast!(AssertStmt => Stmt);
 // tvm-ffi-stubgen(end)
+
+impl AssertStmt {
+    /// Assert `condition`, raising an `error_kind` error with the message `message_parts` when it
+    /// fails (`ir.AssertStmt`).
+    pub fn new(
+        condition: impl Into<Expr>,
+        error_kind: impl Into<StringImm>,
+        message_parts: impl IntoIterator<Item = impl Into<StringImm>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let message_parts = message_parts.into_iter().map(Into::into).collect::<Array<StringImm>>();
+        tvm_ffi::cached_global_func!("ir.AssertStmt")
+            .call_tuple((&condition.into(), &error_kind.into(), &message_parts, &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.For
 /// Complete: reflected fields fill [32, 88) exactly (alignment padding [68, 72)).
@@ -294,6 +330,53 @@ impl For {
 tvm_ffi::impl_object_upcast!(For => Stmt);
 // tvm-ffi-stubgen(end)
 
+/// The execution semantics of a [`For`] loop: `ir::ForKind`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(i32)]
+pub enum ForKind {
+    /// Sequential iterations.
+    #[default]
+    Default = 0,
+    /// Iterations may run in parallel.
+    Parallel = 1,
+    /// The body is vectorized.
+    Vectorized = 2,
+    /// The loop is unrolled.
+    Unrolled = 3,
+}
+
+impl For {
+    /// The loop of `var` from `begin` to `end` by `step`, running `body` with the `kind` semantics
+    /// (`ir.For`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        var: impl Into<Var>,
+        begin: impl Into<Expr>,
+        end: impl Into<Expr>,
+        step: impl Into<Expr>,
+        kind: ForKind,
+        body: impl Into<Stmt>,
+        annotations: Option<&Map<String, Any>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let (var, begin, end, step) = (var.into(), begin.into(), end.into(), step.into());
+        let (kind, body, annotations, loc) =
+            (kind as i32, body.into(), annotations.cloned(), loc.into());
+        tvm_ffi::cached_global_func!("ir.For")
+            .call_packed(&[
+                AnyView::from(&var),
+                AnyView::from(&begin),
+                AnyView::from(&end),
+                AnyView::from(&step),
+                AnyView::from(&kind),
+                AnyView::from(&body),
+                AnyView::from(&annotations),
+                AnyView::from(&loc),
+            ])?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.While
 /// Complete: reflected fields fill [32, 48) exactly.
 #[repr(C)]
@@ -348,6 +431,20 @@ impl While {
 
 tvm_ffi::impl_object_upcast!(While => Stmt);
 // tvm-ffi-stubgen(end)
+
+impl While {
+    /// The loop running `body` while the scalar `condition` holds, checked to be well formed
+    /// (`ir.While`).
+    pub fn checked(
+        condition: impl Into<Expr>,
+        body: impl Into<Stmt>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.While")
+            .call_tuple((&condition.into(), &body.into(), &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.TensorStore
 /// Complete: reflected fields fill [32, 56) exactly.
@@ -409,6 +506,21 @@ impl TensorStore {
 
 tvm_ffi::impl_object_upcast!(TensorStore => Stmt);
 // tvm-ffi-stubgen(end)
+
+impl TensorStore {
+    /// Store `value` into the element of `dest` at `indices` (`ir.TensorStore`).
+    pub fn new(
+        dest: impl Into<Expr>,
+        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        value: impl Into<Expr>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        tvm_ffi::cached_global_func!("ir.TensorStore")
+            .call_tuple((&dest.into(), &indices, &value.into(), &loc.into()))?
+            .try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.RegionStmt
 /// Complete: reflected fields fill [32, 80) exactly.
@@ -485,6 +597,36 @@ impl RegionStmt {
 tvm_ffi::impl_object_upcast!(RegionStmt => Stmt);
 // tvm-ffi-stubgen(end)
 
+impl RegionStmt {
+    /// The region of the region operator `op` on `args`, whose `body` binds `body_params` and
+    /// defines `result_vars`, checked against the operator (`ir.RegionStmt`).
+    pub fn new(
+        op: impl Into<Op>,
+        args: impl IntoIterator<Item = impl Into<Expr>>,
+        body_params: impl IntoIterator<Item = impl Into<Var>>,
+        attrs: impl Into<DictAttrs>,
+        body: impl Into<Stmt>,
+        result_vars: impl IntoIterator<Item = impl Into<Var>>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let (op, attrs, body, loc) = (op.into(), attrs.into(), body.into(), loc.into());
+        let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let body_params = body_params.into_iter().map(Into::into).collect::<Array<Var>>();
+        let result_vars = result_vars.into_iter().map(Into::into).collect::<Array<Var>>();
+        tvm_ffi::cached_global_func!("ir.RegionStmt")
+            .call_packed(&[
+                AnyView::from(&op),
+                AnyView::from(&args),
+                AnyView::from(&body_params),
+                AnyView::from(&attrs),
+                AnyView::from(&body),
+                AnyView::from(&result_vars),
+                AnyView::from(&loc),
+            ])?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.SeqStmt
 /// Complete: reflected fields fill [32, 40) exactly.
 #[repr(C)]
@@ -538,6 +680,18 @@ impl SeqStmt {
 
 tvm_ffi::impl_object_upcast!(SeqStmt => Stmt);
 // tvm-ffi-stubgen(end)
+
+impl SeqStmt {
+    /// The sequence of `seq`, with nested sequences and no-ops flattened; at the location of its
+    /// statements when `loc` is `None` (`ir.SeqStmt`).
+    pub fn new(
+        seq: impl IntoIterator<Item = impl Into<Stmt>>,
+        loc: Option<&Location>,
+    ) -> Result<Self> {
+        let seq = seq.into_iter().map(Into::into).collect::<Array<Stmt>>();
+        tvm_ffi::cached_global_func!("ir.SeqStmt").call_tuple((&seq, loc.cloned()))?.try_into()
+    }
+}
 
 // tvm-ffi-stubgen(begin): object/ir.If
 /// Complete: reflected fields fill [32, 56) exactly.
@@ -605,6 +759,20 @@ impl If {
 tvm_ffi::impl_object_upcast!(If => Stmt);
 // tvm-ffi-stubgen(end)
 
+impl If {
+    /// Run `then_case` if `condition` holds, else `else_case` if given (`ir.If`).
+    pub fn new(
+        condition: impl Into<Expr>,
+        then_case: impl Into<Stmt>,
+        else_case: Option<&Stmt>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.If")
+            .call_tuple((&condition.into(), &then_case.into(), else_case.cloned(), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.Evaluate
 /// Complete: reflected fields fill [32, 40) exactly.
 #[repr(C)]
@@ -659,6 +827,15 @@ impl Evaluate {
 tvm_ffi::impl_object_upcast!(Evaluate => Stmt);
 // tvm-ffi-stubgen(end)
 
+impl Evaluate {
+    /// Evaluate `value` for its side effects (`ir.Evaluate`).
+    pub fn new(value: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.Evaluate")
+            .call_tuple((&value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.Break
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -711,6 +888,8 @@ impl Break {
 
 tvm_ffi::impl_object_upcast!(Break => Stmt);
 // tvm-ffi-stubgen(end)
+
+// `ir.Break` stores its location as given: the generated `Break::new` is the same.
 
 // tvm-ffi-stubgen(begin): object/ir.Return
 /// Complete: reflected fields fill [32, 40) exactly.
@@ -766,6 +945,15 @@ impl Return {
 tvm_ffi::impl_object_upcast!(Return => Stmt);
 // tvm-ffi-stubgen(end)
 
+impl Return {
+    /// Return `value` from the enclosing function (`ir.Return`).
+    pub fn new(value: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
+        tvm_ffi::cached_global_func!("ir.Return")
+            .call_tuple((&value.into(), &loc.into()))?
+            .try_into()
+    }
+}
+
 // tvm-ffi-stubgen(begin): object/ir.Continue
 /// Complete: reflected fields fill [32, 32) exactly.
 #[repr(C)]
@@ -818,3 +1006,5 @@ impl Continue {
 
 tvm_ffi::impl_object_upcast!(Continue => Stmt);
 // tvm-ffi-stubgen(end)
+
+// `ir.Continue` stores its location as given: the generated `Continue::new` is the same.

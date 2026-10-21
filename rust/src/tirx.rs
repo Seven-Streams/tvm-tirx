@@ -22,12 +22,14 @@
 //!
 //! Laid out like `python/tvm_tirx/tirx/`, on top of [`ir`](crate::ir). [`Function`] is a tensor
 //! function, [`TensorType`] the type of a tensor, and [`IndexMap`] and the [`layout`] types map
-//! indices. [`tile`] holds the tile instructions and [`transform`] the TIRx passes.
+//! indices. [`tile`] holds the tile instructions, [`transform`] the TIRx passes and [`analysis`]
+//! the analyses of tensor-level IR.
 
 // An object registered under `tirx` that no file has a block for yet is generated here, to be moved
 // to the file of the Python module that defines it.
 // tvm-ffi-stubgen(prefix): tirx
 
+pub mod analysis;
 pub mod function;
 pub mod index_map;
 pub mod layout;

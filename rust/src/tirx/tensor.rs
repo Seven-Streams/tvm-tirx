@@ -21,23 +21,35 @@
 //! Tensor types.
 //!
 //! The objects `python/tvm_tirx/tirx/tensor.py` defines. A [`TensorType`] is the element type,
-//! memory scope, shape, data alignment and optional layout of a tensor.
+//! memory scope, shape, data alignment and optional layout of a tensor, built with
+//! [`TensorType::new`].
 
 // `custom-new` reserves `new` for a constructor with the native one's semantics (defaults); the
 // generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): tirx.TensorType
 
+// Names the hand-written wrappers use: the import section keeps them even when no generated block
+// does.
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Var
+// tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
+// tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::Result
+
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::Var;
 use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::r#type::TypeObj;
 use crate::runtime::MemoryScope;
+use crate::sym::analyzer::Analyzer;
 use crate::tirx::layout::Layout;
 use std::ops::Deref;
+use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/tirx.TensorType
@@ -111,3 +123,47 @@ impl TensorType {
 
 tvm_ffi::impl_object_upcast!(TensorType => Type);
 // tvm-ffi-stubgen(end)
+
+impl TensorType {
+    /// The type of a tensor of `shape` and `dtype` in `scope`, aligned to `data_alignment` bytes
+    /// (the runtime's allocation alignment when 0 or less), with `layout` if given
+    /// (`tirx.TensorType`).
+    pub fn new(
+        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        dtype: impl Into<PrimType>,
+        scope: impl Into<MemoryScope>,
+        data_alignment: i32,
+        layout: Option<&Layout>,
+        loc: impl Into<Location>,
+    ) -> Result<Self> {
+        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (dtype, scope, loc) = (dtype.into(), scope.into(), loc.into());
+        tvm_ffi::cached_global_func!("tirx.TensorType")
+            .call_packed(&[
+                AnyView::from(&shape),
+                AnyView::from(&dtype),
+                AnyView::from(&scope),
+                AnyView::from(&data_alignment),
+                AnyView::from(&layout.cloned()),
+                AnyView::from(&loc),
+            ])?
+            .try_into()
+    }
+
+    /// Whether the layout is absent or equals the default row-major layout of the shape
+    /// (`tirx.TensorTypeHasDefaultLayout`).
+    pub fn has_default_layout(&self, analyzer: Option<&Analyzer>) -> Result<bool> {
+        tvm_ffi::cached_global_func!("tirx.TensorTypeHasDefaultLayout")
+            .call_tuple((self, analyzer.cloned()))?
+            .try_into()
+    }
+}
+
+/// Whether the tensor variable `tensor` is a scalar: one element, the default alignment and a
+/// trivial layout; `alloc_or_decl` is true for `alloc_scalar`, false for `decl_scalar`
+/// (`tirx.TensorIsScalar`).
+pub fn tensor_is_scalar(tensor: impl Into<Var>, alloc_or_decl: bool) -> Result<bool> {
+    tvm_ffi::cached_global_func!("tirx.TensorIsScalar")
+        .call_tuple((&tensor.into(), alloc_or_decl))?
+        .try_into()
+}
