@@ -36,6 +36,7 @@
 //! - [`ty`]: defining IR types, the types of expressions, in Rust with [`tirx_type`].
 //! - [`ops`]: helpers over the IR constructors for code that builds IR, expression patterns,
 //!   and the native functions Rust calls rather than writes again (printing, comparison).
+//! - [`passes`]: Rust ports of the TIRx passes, which mirror the C++ passes of the same name.
 //!
 //! # Using the bindings
 //!
@@ -247,8 +248,10 @@ macro_rules! error {
 
 pub mod backend;
 pub mod codegen;
+pub(crate) mod fast_hash;
 pub mod ir;
 pub mod ops;
+pub mod passes;
 pub mod runtime;
 pub mod script;
 pub mod sym;
@@ -319,6 +322,15 @@ static OPS: &[&ir::OpHandle] = &[];
 #[no_mangle]
 pub extern "C" fn tvm_rust_register_ops() -> i32 {
     report("tvm_rust_register_ops", ir::register_ops(OPS))
+}
+
+/// Entry point for a host process that loads this crate as a shared library: registers this
+/// crate's operators, then every Rust pass as `rust.tirx.transform.<Name>`. Returns 0 on success;
+/// on failure prints the error and returns -1.
+#[no_mangle]
+pub extern "C" fn tvm_rust_register_passes() -> i32 {
+    let registered = ir::register_ops(OPS).and_then(|()| passes::register_globals());
+    report("tvm_rust_register_passes", registered)
 }
 
 fn report(entry: &str, result: tvm_ffi::Result<()>) -> i32 {
