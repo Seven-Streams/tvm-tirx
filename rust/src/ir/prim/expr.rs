@@ -22,12 +22,12 @@
 //! and `Let`.
 //!
 //! The objects `python/tvm_tirx/ir/prim/expr.py` defines. A binary operation such as [`Add`]
-//! holds its operands `a` and `b`. Their `new` is the native constructor, which checks the operand
-//! types and derives the result type; the type-promoting operators are in [`super::op`].
+//! holds its operands `a` and `b`. Their `new` is written in Rust after the C++ constructor: it
+//! checks the operand types and derives the result type. The type-promoting operators are in
+//! [`super::op`].
 
-// `custom-new` reserves `new` for a constructor with the native one's semantics (operand type
-// checks and the derived result type); the generated `from_complete_fields` allocates the fields as
-// given.
+// `custom-new` reserves `new` for a constructor with the C++ one's semantics (operand type checks
+// and the derived result type); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): prim.Cast
 // tvm-ffi-stubgen(custom-new): prim.LShift
 // tvm-ffi-stubgen(custom-new): prim.RShift
@@ -57,8 +57,13 @@
 // tvm-ffi-stubgen(custom-new): prim.Let
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::DLDataType
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
@@ -66,9 +71,14 @@ use crate::ir::expr::ExprObj;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
+use crate::ir::r#type::PrimTypeObj;
 use crate::ir::r#type::Type;
+use crate::ir::support;
 use std::ops::Deref;
+use tvm_ffi::AnyView;
+use tvm_ffi::DLDataType;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
@@ -1575,257 +1585,272 @@ tvm_ffi::impl_object_upcast!(Let => Expr);
 // tvm-ffi-stubgen(end)
 
 impl Cast {
-    /// The node converting `value` to `ty`, which has as many lanes as `value` (`prim.Cast`).
+    /// The node converting `value` to `ty`, which has as many lanes as `value`
+    /// (C++ `Cast(ty, value, loc)`).
     pub fn new(
         ty: impl Into<PrimType>,
         value: impl Into<Expr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Cast")
-            .call_tuple((&ty.into(), &value.into(), &loc.into()))?
-            .try_into()
+        let (ty, value) = (ty.into(), value.into());
+        let value_dtype = support::prim_dtype(&value)?;
+        if ty.dtype.lanes != value_dtype.lanes {
+            let condition = "ty->dtype.lanes == value_expr_ty->dtype.lanes";
+            let (lhs, rhs) = (ty.dtype.lanes, value_dtype.lanes);
+            return Err(support::compare_failed(tvm_ffi::INTERNAL_ERROR, condition, lhs, rhs, ""));
+        }
+        Ok(Self::from_complete_fields(loc.into(), ty.into(), value))
     }
 }
 
-impl LShift {
-    /// The node `a << b` over integer operands of the same type (`prim.LShift`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.LShift")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
+/// What the constructor of a binary node checks of its operands, and the type it gives the node
+/// (`TVM_DEFINE_BINOP_CONSTRUCTOR` and its siblings in `src/ir/prim/expr.cc`).
+#[derive(Clone, Copy)]
+enum Operands {
+    /// `Add`, `Min`, ...: operands of one type, which is the node's.
+    Arith,
+    /// `LShift`, `BitwiseAnd`, ...: as `Arith`, of an integer type, or boolean if allowed.
+    Bitwise { allow_bool: bool },
+    /// `EQ`, `LT`, ...: operands of one type; the node is boolean.
+    Compare,
+}
+
+/// The type of the binary node `node` of `a` and `b`, after the checks of its C++ constructor.
+fn binary_type(node: &str, operands: Operands, a: &Expr, b: &Expr) -> Result<Type> {
+    let (a_dtype, b_dtype) = (support::prim_dtype(a)?, support::prim_dtype(b)?);
+    if a_dtype != b_dtype {
+        let message = format!(
+            "mismatched types. {} vs. {}\n",
+            support::dtype_name(a_dtype),
+            support::dtype_name(b_dtype)
+        );
+        let condition = "a_ty->dtype == b_ty->dtype";
+        return Err(support::check_failed(tvm_ffi::TYPE_ERROR, condition, &message));
+    }
+    match operands {
+        Operands::Arith => Ok(a.ty.clone()),
+        Operands::Bitwise { allow_bool } => {
+            let code = a_dtype.code;
+            if matches!(code, support::INT | support::UINT) || (allow_bool && code == support::BOOL)
+            {
+                return Ok(a.ty.clone());
+            }
+            let condition = format!(
+                "a.ty().MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt) || \
+                 ({allow_bool} && a.ty().MatchesCode(DLDataTypeCode::kDLBool))"
+            );
+            let operands = if allow_bool { "integer or boolean" } else { "integer" };
+            let message = format!("{node} requires {operands} operands");
+            Err(support::check_failed(tvm_ffi::TYPE_ERROR, &condition, &message))
+        }
+        Operands::Compare => Ok(bool_type(a_dtype)?.into()),
     }
 }
 
-impl RShift {
-    /// The node `a >> b` over integer operands of the same type (`prim.RShift`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.RShift")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
+/// The boolean type with the lanes of `dtype` (C++ `PrimType(DLDataType{kDLBool, 8, lanes})`).
+fn bool_type(operand: DLDataType) -> Result<PrimType> {
+    use crate::ir::dtype;
+    PrimType::from_dtype(dtype::with_lanes(dtype::bool(), operand.lanes))
 }
 
-impl BitwiseAnd {
-    /// The node `a & b` over integer or boolean operands of the same type (`prim.BitwiseAnd`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.BitwiseAnd")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
+/// `impl $node { pub fn new(a, b, loc) }` for each binary node, with the checks of its C++
+/// constructor.
+macro_rules! binary_new {
+    ($($node:ident: $operands:expr, $doc:literal;)+) => {
+        $(
+            impl $node {
+                #[doc = $doc]
+                pub fn new(
+                    a: impl Into<Expr>,
+                    b: impl Into<Expr>,
+                    loc: impl Into<Location>,
+                ) -> Result<Self> {
+                    let (a, b) = (a.into(), b.into());
+                    let ty = binary_type(stringify!($node), $operands, &a, &b)?;
+                    Ok(Self::from_complete_fields(loc.into(), ty, a, b))
+                }
+            }
+        )+
+    };
 }
 
-impl BitwiseOr {
-    /// The node `a | b` over integer or boolean operands of the same type (`prim.BitwiseOr`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.BitwiseOr")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
+binary_new! {
+    LShift: Operands::Bitwise { allow_bool: false },
+        "The node `a << b` over integer operands of the same type (C++ `LShift(a, b, loc)`).";
+    RShift: Operands::Bitwise { allow_bool: false },
+        "The node `a >> b` over integer operands of the same type (C++ `RShift(a, b, loc)`).";
+    BitwiseAnd: Operands::Bitwise { allow_bool: true },
+        "The node `a & b` over integer or boolean operands of the same type \
+         (C++ `BitwiseAnd(a, b, loc)`).";
+    BitwiseOr: Operands::Bitwise { allow_bool: true },
+        "The node `a | b` over integer or boolean operands of the same type \
+         (C++ `BitwiseOr(a, b, loc)`).";
+    BitwiseXor: Operands::Bitwise { allow_bool: true },
+        "The node `a ^ b` over integer or boolean operands of the same type \
+         (C++ `BitwiseXor(a, b, loc)`).";
+    Add: Operands::Arith, "The node `a + b` over operands of the same type (C++ `Add(a, b, loc)`).";
+    Sub: Operands::Arith, "The node `a - b` over operands of the same type (C++ `Sub(a, b, loc)`).";
+    Mul: Operands::Arith, "The node `a * b` over operands of the same type (C++ `Mul(a, b, loc)`).";
+    Div: Operands::Arith, "The node `a / b` over operands of the same type (C++ `Div(a, b, loc)`).";
+    Mod: Operands::Arith,
+        "The node `a % b`, truncated, over operands of the same type (C++ `Mod(a, b, loc)`).";
+    FloorDiv: Operands::Arith,
+        "The node `floor(a / b)` over operands of the same type (C++ `FloorDiv(a, b, loc)`).";
+    FloorMod: Operands::Arith,
+        "The node `a - floor(a / b) * b` over operands of the same type \
+         (C++ `FloorMod(a, b, loc)`).";
+    Min: Operands::Arith,
+        "The node `min(a, b)` over operands of the same type (C++ `Min(a, b, loc)`).";
+    Max: Operands::Arith,
+        "The node `max(a, b)` over operands of the same type (C++ `Max(a, b, loc)`).";
+    EQ: Operands::Compare,
+        "The node the boolean `a == b` over operands of the same type (C++ `EQ(a, b, loc)`).";
+    NE: Operands::Compare,
+        "The node the boolean `a != b` over operands of the same type (C++ `NE(a, b, loc)`).";
+    LT: Operands::Compare,
+        "The node the boolean `a < b` over operands of the same type (C++ `LT(a, b, loc)`).";
+    LE: Operands::Compare,
+        "The node the boolean `a <= b` over operands of the same type (C++ `LE(a, b, loc)`).";
+    GT: Operands::Compare,
+        "The node the boolean `a > b` over operands of the same type (C++ `GT(a, b, loc)`).";
+    GE: Operands::Compare,
+        "The node the boolean `a >= b` over operands of the same type (C++ `GE(a, b, loc)`).";
 }
 
-impl BitwiseXor {
-    /// The node `a ^ b` over integer or boolean operands of the same type (`prim.BitwiseXor`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.BitwiseXor")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
+/// The type of the logical node of `a` and `b`, after the checks of the C++ `And` and `Or`
+/// constructors: boolean operands of one type.
+fn logical_type(a: &Expr, b: &Expr) -> Result<Type> {
+    let (a_dtype, b_dtype) = (support::prim_dtype(a)?, support::prim_dtype(b)?);
+    for (dtype, operand) in [(a_dtype, "a_ty"), (b_dtype, "b_ty")] {
+        if dtype.code != support::BOOL {
+            let condition = format!("{operand}.MatchesCode(DLDataTypeCode::kDLBool)");
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, &condition, ""));
+        }
     }
-}
-
-impl Add {
-    /// The node `a + b` over operands of the same type (`prim.Add`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Add")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
+    if a_dtype != b_dtype {
+        return Err(support::check_failed(tvm_ffi::TYPE_ERROR, "a_ty == b_ty", "mismatched types"));
     }
-}
-
-impl Sub {
-    /// The node `a - b` over operands of the same type (`prim.Sub`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Sub")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl Mul {
-    /// The node `a * b` over operands of the same type (`prim.Mul`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Mul")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl Div {
-    /// The node `a / b` over operands of the same type (`prim.Div`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Div")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl Mod {
-    /// The node `a % b`, truncated, over operands of the same type (`prim.Mod`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Mod")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl FloorDiv {
-    /// The node `floor(a / b)` over operands of the same type (`prim.FloorDiv`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.FloorDiv")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl FloorMod {
-    /// The node `a - floor(a / b) * b` over operands of the same type (`prim.FloorMod`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.FloorMod")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl Min {
-    /// The node `min(a, b)` over operands of the same type (`prim.Min`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Min")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl Max {
-    /// The node `max(a, b)` over operands of the same type (`prim.Max`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Max")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl EQ {
-    /// The node the boolean `a == b` over operands of the same type (`prim.EQ`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.EQ")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl NE {
-    /// The node the boolean `a != b` over operands of the same type (`prim.NE`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.NE")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl LT {
-    /// The node the boolean `a < b` over operands of the same type (`prim.LT`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.LT")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl LE {
-    /// The node the boolean `a <= b` over operands of the same type (`prim.LE`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.LE")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl GT {
-    /// The node the boolean `a > b` over operands of the same type (`prim.GT`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.GT")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
-}
-
-impl GE {
-    /// The node the boolean `a >= b` over operands of the same type (`prim.GE`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.GE")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
-    }
+    Ok(bool_type(a_dtype)?.into())
 }
 
 impl And {
-    /// The node the boolean `a && b` over boolean operands (`prim.And`).
+    /// The node the boolean `a && b` over boolean operands (C++ `And(a, b, loc)`).
     pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.And")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
+        let (a, b) = (a.into(), b.into());
+        let ty = logical_type(&a, &b)?;
+        Ok(Self::from_complete_fields(loc.into(), ty, a, b))
     }
 }
 
 impl Or {
-    /// The node the boolean `a || b` over boolean operands (`prim.Or`).
+    /// The node the boolean `a || b` over boolean operands (C++ `Or(a, b, loc)`).
     pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Or")
-            .call_tuple((&a.into(), &b.into(), &loc.into()))?
-            .try_into()
+        let (a, b) = (a.into(), b.into());
+        let ty = logical_type(&a, &b)?;
+        Ok(Self::from_complete_fields(loc.into(), ty, a, b))
     }
 }
 
 impl BitwiseNot {
-    /// The node `~a` over an integer or boolean operand (`prim.BitwiseNot`).
+    /// The node `~a` over an integer or boolean operand (C++ `BitwiseNot(a, loc)`).
     pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.BitwiseNot")
-            .call_tuple((&a.into(), &loc.into()))?
-            .try_into()
+        let a = a.into();
+        if !matches!(support::prim_dtype(&a)?.code, support::INT | support::UINT | support::BOOL) {
+            let condition = "a_ty.MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt) || \
+                             a_ty.MatchesCode(DLDataTypeCode::kDLBool)";
+            let message = "BitwiseNot requires an integer or boolean operand";
+            return Err(support::check_failed(tvm_ffi::TYPE_ERROR, condition, message));
+        }
+        Ok(Self::from_complete_fields(loc.into(), a.ty.clone(), a))
     }
 }
 
 impl Not {
-    /// The node the boolean `!a` over a boolean operand (`prim.Not`).
+    /// The node the boolean `!a` over a boolean operand (C++ `Not(a, loc)`).
     pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Not").call_tuple((&a.into(), &loc.into()))?.try_into()
+        let a = a.into();
+        let a_dtype = support::prim_dtype(&a)?;
+        if a_dtype.code != support::BOOL {
+            let condition = "a_ty.MatchesCode(DLDataTypeCode::kDLBool)";
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
+        }
+        Ok(Self::from_complete_fields(loc.into(), bool_type(a_dtype)?.into(), a))
     }
 }
 
 impl Select {
     /// The node choosing `true_value` where `condition` holds and `false_value` elsewhere, which
-    /// evaluates both (`prim.Select`).
+    /// evaluates both (C++ `Select(condition, true_value, false_value, loc)`).
     pub fn new(
         condition: impl Into<Expr>,
         true_value: impl Into<Expr>,
         false_value: impl Into<Expr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Select")
-            .call_tuple((&condition.into(), &true_value.into(), &false_value.into(), &loc.into()))?
-            .try_into()
+        let (condition, true_value, false_value) =
+            (condition.into(), true_value.into(), false_value.into());
+        let condition_dtype = support::prim_dtype(&condition)?;
+        let true_dtype = support::prim_dtype(&true_value)?;
+        let false_dtype = support::prim_dtype(&false_value)?;
+        if condition_dtype.code != support::BOOL {
+            let condition = "condition_ty.MatchesCode(DLDataTypeCode::kDLBool)";
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
+        }
+        // C++ `GetLanesOrVScaleFactor(ty)`.
+        let lanes_or_vscale_factor = |dtype: DLDataType| -> Result<i32> {
+            match support::is_scalable_vector(dtype) {
+                true => Ok(-(support::encoded_lanes(dtype) as i32)),
+                false => support::lanes(dtype),
+            }
+        };
+        if lanes_or_vscale_factor(condition_dtype)? != lanes_or_vscale_factor(true_dtype)?
+            && !support::is_scalar(condition_dtype)
+        {
+            let condition = "GetLanesOrVScaleFactor(condition_ty) == \
+                             GetLanesOrVScaleFactor(true_ty) || condition_ty.IsScalar()";
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
+        }
+        if false_dtype != true_dtype {
+            let message = format!(
+                "mismatched types. False type: {}; True type: {}",
+                support::dtype_name(false_dtype),
+                support::dtype_name(true_dtype)
+            );
+            return Err(support::check_failed(
+                tvm_ffi::TYPE_ERROR,
+                "false_ty == true_ty",
+                &message,
+            ));
+        }
+        let ty = true_value.ty.clone();
+        Ok(Self::from_complete_fields(loc.into(), ty, condition, true_value, false_value))
     }
 }
 
 impl Let {
-    /// The node binding `var` to `value` in `body` (`prim.Let`).
+    /// The node binding `var` to `value` in `body`, of the type of `body`
+    /// (C++ `Let(var, value, body, loc)`).
     pub fn new(
         var: impl Into<Var>,
         value: impl Into<Expr>,
         body: impl Into<Expr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("prim.Let")
-            .call_tuple((&var.into(), &value.into(), &body.into(), &loc.into()))?
-            .try_into()
+        let (var, value, body) = (var.into(), value.into(), body.into());
+        let value_dtype = support::prim_dtype(&value)?;
+        support::prim_dtype(&body)?;
+        let Some(var_ty) = var.ty.as_node::<PrimTypeObj>() else {
+            let message = format!(
+                "Cannot treat type `{}` as type `ir.PrimType`",
+                support::type_key(AnyView::from(&var.ty).type_index())
+            );
+            return Err(tvm_ffi::Error::new(tvm_ffi::TYPE_ERROR, &message, ""));
+        };
+        if value_dtype != var_ty.dtype {
+            let condition = "value.ty() == var->ty.as_or_throw<PrimType>()";
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
+        }
+        let ty = body.ty.clone();
+        Ok(Self::from_complete_fields(loc.into(), ty, var, value, body))
     }
 }

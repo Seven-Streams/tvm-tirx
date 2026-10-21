@@ -23,7 +23,7 @@ use tvm_tirx::ir::{Expr, ExprObj, IntImm, Range, Var};
 use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::{Array, Map, Object, ObjectIdentity, ObjectRefCast};
 
-use super::{fixture, imm, int32, op, range, var, Fixture};
+use super::{fixture, int32, op, range, var, Fixture};
 use crate::common::{assert_type_contracts, global};
 
 #[test]
@@ -88,11 +88,11 @@ fn iter_maps_decompose_into_marks_and_splits() {
 
 #[test]
 fn iter_maps() {
-    let analyzer = Analyzer::new().unwrap();
+    let analyzer = Analyzer::new();
     let (x, y) = (var("x"), var("y"));
     let dom = Map::from_iter([(x.clone(), range(0, 4)), (y.clone(), range(0, 4))]);
     let index = op("prim._OpAdd", op("prim._OpMul", &x, int32(4)), &y);
-    let predicate = imm("bool", 1);
+    let predicate = Expr::from(true);
 
     let detected =
         detect_iter_map([index.clone()], &dom, &predicate, IterMapLevel::Bijective, None, true)
@@ -130,6 +130,6 @@ fn iter_maps() {
     let mark = IterMark::new(x.clone().into(), int32(4));
     let split = IterSplitExpr::new(mark, int32(1), int32(4), int32(1)).unwrap();
     assert!(analyzer.can_prove_equal(split.scale().unwrap(), int32(1)).unwrap());
-    let sum = IterSumExpr::new([split], int32(0)).unwrap();
+    let sum = IterSumExpr::new([split], int32(0));
     assert_eq!(sum.args().unwrap().len(), 1);
 }

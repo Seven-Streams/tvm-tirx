@@ -30,9 +30,11 @@
 // tvm-ffi-stubgen(import-object): crate::ir::transform::core::PassContext
 // tvm-ffi-stubgen(import-object): crate::tirx::function::Function
 // tvm-ffi-stubgen(import-object): tvm_ffi::RValueRef
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::module::IRModule;
+use crate::ir::support;
 use crate::ir::transform::core::Pass;
 use crate::ir::transform::core::PassContext;
 use crate::ir::transform::core::PassInfo;
@@ -98,14 +100,16 @@ impl FunctionPass {
             + Sync
             + 'static,
         pass_info: impl Into<PassInfo>,
-    ) -> Result<Self> {
+    ) -> Self {
         let pass_func = tvm_ffi::Function::from_typed(
             move |func: RValueRef<Function>, module: IRModule, ctx: PassContext| {
                 pass_func(func.into_inner(), module, ctx)
             },
         );
-        tvm_ffi::cached_global_func!("tirx.transform.CreateFunctionPass")
-            .call_tuple((&pass_func, &pass_info.into()))?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("tirx.transform.CreateFunctionPass")
+                .call_tuple((&pass_func, &pass_info.into()))
+                .and_then(|any| any.try_into()),
+        )
     }
 }

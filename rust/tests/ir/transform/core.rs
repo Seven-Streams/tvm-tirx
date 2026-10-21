@@ -68,8 +68,7 @@ fn module_and_sequential_passes() {
             Err(tvm_tirx::tvm_ffi::Error::new(tvm_tirx::tvm_ffi::VALUE_ERROR, "refused", ""))
         },
         PassInfo::new(0, "failing".into()),
-    )
-    .unwrap();
+    );
     assert!(Pass::from(&failing).run(empty_module()).is_err());
 
     log.lock().unwrap().clear();
@@ -81,8 +80,7 @@ fn module_and_sequential_passes() {
         ],
         0,
         "seq",
-    )
-    .unwrap();
+    );
     assert_eq!(seq.passes().unwrap().len(), 3);
     assert_eq!(Pass::from(&seq).info().unwrap().name.as_str(), "seq");
     let ctx = PassContext::create(2, [""; 0], ["b"], no_instruments(), None).unwrap();

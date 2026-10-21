@@ -28,9 +28,11 @@
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
 // tvm-ffi-stubgen(import-object): crate::ir::module::IRModule
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::module::IRModule;
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
@@ -385,15 +387,17 @@ impl ModulePass {
     pub fn new(
         pass_func: impl Fn(IRModule, PassContext) -> Result<IRModule> + Send + Sync + 'static,
         pass_info: impl Into<PassInfo>,
-    ) -> Result<Self> {
+    ) -> Self {
         let pass_func = tvm_ffi::Function::from_typed(
             move |module: tvm_ffi::RValueRef<IRModule>, ctx: PassContext| {
                 pass_func(module.into_inner(), ctx)
             },
         );
-        tvm_ffi::cached_global_func!("transform.MakeModulePass")
-            .call_tuple((&pass_func, &pass_info.into()))?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("transform.MakeModulePass")
+                .call_tuple((&pass_func, &pass_info.into()))
+                .and_then(|any| any.try_into()),
+        )
     }
 }
 
@@ -404,11 +408,13 @@ impl Sequential {
         passes: impl IntoIterator<Item = impl Into<Pass>>,
         opt_level: i32,
         name: &str,
-    ) -> Result<Self> {
+    ) -> Self {
         let passes = passes.into_iter().map(Into::into).collect::<Array<Pass>>();
-        tvm_ffi::cached_global_func!("transform.Sequential")
-            .call_tuple((&passes, opt_level, String::from(name)))?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("transform.Sequential")
+                .call_tuple((&passes, opt_level, String::from(name)))
+                .and_then(|any| any.try_into()),
+        )
     }
 }
 

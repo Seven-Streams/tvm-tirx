@@ -43,5 +43,4 @@ fn logging_pass(name: &str, log: &Log) -> ModulePass {
         },
         PassInfo::new(0, name.into()),
     )
-    .unwrap()
 }

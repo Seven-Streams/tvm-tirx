@@ -22,10 +22,13 @@
 //!
 //! The objects `python/tvm_tirx/ir/expr.py` defines. [`Expr`] is the base of every expression and
 //! carries its type and location. The primitive arithmetic and vector expressions are in
-//! [`prim`](super::prim). The constructors with the native semantics are `new`, or `from_dtype`
-//! and the like where `new` allocates the fields as given.
+//! [`prim`](super::prim). The constructors are `new`, or `from_dtype` and the like where `new`
+//! allocates the fields as given; they are written in Rust after the C++ constructors, with their
+//! checks, defaults and errors. The constants of the common types are [`IntImm::int32`],
+//! [`IntImm::int64`], [`IntImm::bool`], [`FloatImm::float32`] and [`FloatImm::float64`], and an
+//! `i32`, `i64`, `bool`, `f32` or `f64` converts into an [`Expr`] as C++ converts it implicitly.
 
-// `custom-new` reserves `new` for a constructor with the native one's semantics (defaults, implicit
+// `custom-new` reserves `new` for a constructor with the C++ one's semantics (defaults, implicit
 // conversions, a derived type); the generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): ir.GlobalVar
 // tvm-ffi-stubgen(custom-new): ir.Tuple
@@ -38,12 +41,42 @@
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex
+// tvm-ffi-stubgen(import-object): crate::ir::location::UnknownLoc
+// tvm-ffi-stubgen(import-object): crate::ir::op::OpObj
+// tvm-ffi-stubgen(import-object): crate::ir::prim::AddObj
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::AnyType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::FuncType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::FuncTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::MissingType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::MissingTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::StringType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::TupleType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::TupleTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::dtype
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
+use crate::ir::dtype;
 use crate::ir::location::Location;
+use crate::ir::location::UnknownLoc;
+use crate::ir::op::OpObj;
+use crate::ir::prim::AddObj;
+use crate::ir::r#type::AnyType;
+use crate::ir::r#type::FuncType;
+use crate::ir::r#type::FuncTypeObj;
+use crate::ir::r#type::MissingType;
+use crate::ir::r#type::MissingTypeObj;
+use crate::ir::r#type::PrimType;
+use crate::ir::r#type::StringType;
+use crate::ir::r#type::TupleType;
+use crate::ir::r#type::TupleTypeObj;
 use crate::ir::r#type::Type;
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::AnyView;
@@ -52,8 +85,10 @@ use tvm_ffi::BigInt;
 use tvm_ffi::DLDataType;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::String;
+use tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/ir.Expr
@@ -298,11 +333,10 @@ tvm_ffi::impl_object_upcast!(GlobalVar => Expr);
 // tvm-ffi-stubgen(end)
 
 impl GlobalVar {
-    /// The global variable `name_hint`, of a missing type (`ir.GlobalVar`).
-    pub fn new(name_hint: &str, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.GlobalVar")
-            .call_tuple((String::from(name_hint), &loc.into()))?
-            .try_into()
+    /// The global variable `name_hint`, of a missing type (C++ `GlobalVar(name_hint, loc)`).
+    pub fn new(name_hint: &str, loc: impl Into<Location>) -> Self {
+        let ty = MissingType::new().into();
+        Self::from_complete_fields(loc.into(), ty, String::from(name_hint))
     }
 }
 
@@ -362,13 +396,21 @@ tvm_ffi::impl_object_upcast!(Tuple => Expr);
 
 impl Tuple {
     /// The tuple of `fields`, typed by the types of its fields when they are all known
-    /// (`ir.Tuple`).
+    /// (C++ `Tuple(fields, loc)`).
     pub fn new(
         fields: impl IntoIterator<Item = impl Into<Expr>>,
         loc: impl Into<Location>,
-    ) -> Result<Self> {
+    ) -> Self {
         let fields = fields.into_iter().map(Into::into).collect::<Array<Expr>>();
-        tvm_ffi::cached_global_func!("ir.Tuple").call_tuple((&fields, &loc.into()))?.try_into()
+        let ty: Type =
+            match fields.iter().any(|field| field.ty.as_node::<MissingTypeObj>().is_some()) {
+                true => MissingType::new().into(),
+                false => {
+                    let field_types = fields.iter().map(|field| field.ty.clone());
+                    TupleType::new(field_types, UnknownLoc::new()).into()
+                }
+            };
+        Self::from_complete_fields(loc.into(), ty, fields)
     }
 }
 
@@ -429,15 +471,50 @@ tvm_ffi::impl_object_upcast!(TupleGetItem => Expr);
 
 impl TupleGetItem {
     /// Field `index` of `tuple_value`, typed by the field type and checked against the tuple type
-    /// when it is known (`ir.TupleGetItem`).
+    /// when it is known (C++ `TupleGetItem(tuple, index, loc)`).
     pub fn from_tuple(
         tuple_value: impl Into<Expr>,
         index: i32,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.TupleGetItem")
-            .call_tuple((&tuple_value.into(), index, &loc.into()))?
-            .try_into()
+        let tuple_value = tuple_value.into();
+        if index < 0 {
+            let message = format!(
+                "Index out of bounds: Tuple {} cannot be accessed with negative index {index}",
+                support::repr(&tuple_value)
+            );
+            return Err(support::compare_failed(
+                tvm_ffi::INDEX_ERROR,
+                "index >= 0",
+                index,
+                0,
+                &message,
+            ));
+        }
+        let ty: Type = match tuple_value.ty.as_node::<TupleTypeObj>() {
+            Some(tuple_type) => {
+                let size = tuple_type.fields.len();
+                if index as usize >= size {
+                    let message = format!(
+                        "Index out of bounds: Tuple {} is of size {size}, and cannot be accessed \
+                         with index {index}",
+                        support::repr(&tuple_value)
+                    );
+                    let condition = "index < tuple_type->fields.size()";
+                    let error = support::compare_failed(
+                        tvm_ffi::INDEX_ERROR,
+                        condition,
+                        index,
+                        size,
+                        &message,
+                    );
+                    return Err(error);
+                }
+                tuple_type.fields.get(index as usize)?
+            }
+            None => MissingType::new().into(),
+        };
+        Ok(Self::new(loc.into(), ty, tuple_value, index))
     }
 }
 
@@ -502,17 +579,34 @@ tvm_ffi::impl_object_upcast!(TensorLoad => Expr);
 // tvm-ffi-stubgen(end)
 
 impl TensorLoad {
-    /// The element of `source` at `indices`, typed by the element type of `source`
-    /// (`ir.TensorLoad`).
+    /// The element of `source` at `indices`, typed by the element type of `source`: the type the
+    /// type of `source` infers (C++ `TensorLoad(source, indices, loc)`).
     pub fn new(
         source: impl Into<Expr>,
         indices: impl IntoIterator<Item = impl Into<Expr>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
+        static INFER_TYPE: support::TypeAttr =
+            support::TypeAttr::new("__tvm_tensor_load_infer_type__");
+        let (source, loc) = (source.into(), loc.into());
         let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
-        tvm_ffi::cached_global_func!("ir.TensorLoad")
-            .call_tuple((&source.into(), &indices, &loc.into()))?
-            .try_into()
+        for index in indices.iter() {
+            support::prim_dtype(&index)?;
+        }
+        let ty_index = AnyView::from(&source.ty).type_index();
+        let Some(infer) = INFER_TYPE.get(ty_index) else {
+            let message =
+                format!("Type {} does not support TensorLoad", support::type_key(ty_index));
+            return Err(support::check_failed(tvm_ffi::TYPE_ERROR, "infer.has_value()", &message));
+        };
+        let load = Self::from_complete_fields(loc, MissingType::new().into(), source, indices);
+        let ty: PrimType = support::NativeHook::from_any(infer)?.call_as(&load)?;
+        Ok(Self::from_complete_fields(
+            load.loc.clone(),
+            ty.into(),
+            load.source.clone(),
+            load.indices.clone(),
+        ))
     }
 }
 
@@ -623,12 +717,173 @@ tvm_ffi::impl_object_upcast!(FloatImm => Expr, FloatImm => Constant);
 // tvm-ffi-stubgen(end)
 
 impl FloatImm {
-    /// The floating-point constant `value` of type `dtype`, checked to fit it (`ir.FloatImm`).
+    /// The floating-point constant `value` of type `dtype`, checked to fit it
+    /// (C++ `FloatImm(PrimType(dtype), value, loc)`).
     pub fn from_dtype(dtype: DLDataType, value: f64, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.FloatImm")
-            .call_tuple((dtype, value, &loc.into()))?
-            .try_into()
+        let ty = PrimType::from_dtype(dtype)?;
+        check_float_imm(dtype, value)?;
+        Ok(Self::new(loc.into(), ty.into(), value))
     }
+
+    /// The `float32` constant `value` at the unknown location, which every `f32` is
+    /// (C++ `FloatImm(PrimType::Float(32), value)`).
+    pub fn float32(value: f32) -> Self {
+        Self::builtin(dtype::float(32), value as f64)
+    }
+
+    /// The `float64` constant `value` at the unknown location, which every `f64` is
+    /// (C++ `FloatImm(PrimType::Float(64), value)`).
+    pub fn float64(value: f64) -> Self {
+        Self::builtin(dtype::float(64), value)
+    }
+
+    /// [`FloatImm::from_dtype`] of a value its type holds, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType, value: f64) -> Self {
+        support::infallible(Self::from_dtype(dtype, value, UnknownLoc::new()))
+    }
+}
+
+/// An `f32` is a `float32` constant, as C++ converts a `float` to a `PrimExpr`.
+impl From<f32> for FloatImm {
+    fn from(value: f32) -> Self {
+        Self::float32(value)
+    }
+}
+
+/// An `f64` is a `float64` constant. (C++ converts a `double` held by an `Any` to `float32`, as
+/// [`prim::convert`](crate::ir::prim::convert) does.)
+impl From<f64> for FloatImm {
+    fn from(value: f64) -> Self {
+        Self::float64(value)
+    }
+}
+
+impl From<f32> for Expr {
+    fn from(value: f32) -> Self {
+        FloatImm::float32(value).into()
+    }
+}
+
+impl From<f64> for Expr {
+    fn from(value: f64) -> Self {
+        FloatImm::float64(value).into()
+    }
+}
+
+/// The largest finite value of each float8 type code, and whether the type is unsigned
+/// (`support::kMax*` in `src/support/limits.h`).
+fn float8_bound(code: u8) -> Option<(f64, bool)> {
+    use tvm_ffi::DLDataTypeCode::*;
+    let bound = match code {
+        c if c == kDLFloat8_e3m4 as u8 => (31.0, false),
+        c if c == kDLFloat8_e4m3 as u8 => (448.0, false),
+        c if c == kDLFloat8_e4m3b11fnuz as u8 => (30.0, true),
+        c if c == kDLFloat8_e4m3fn as u8 => (448.0, false),
+        c if c == kDLFloat8_e4m3fnuz as u8 => (448.0, true),
+        c if c == kDLFloat8_e5m2 as u8 => (57344.0, false),
+        c if c == kDLFloat8_e5m2fnuz as u8 => (57344.0, true),
+        // `support::kMaxE8M0FNU`, 2^128.
+        c if c == kDLFloat8_e8m0fnu as u8 => (3.402_823_669_209_385e38, true),
+        _ => return None,
+    };
+    Some(bound)
+}
+
+/// The largest finite value of each float6 type code.
+fn float6_bound(code: u8) -> Option<f64> {
+    use tvm_ffi::DLDataTypeCode::*;
+    match code {
+        c if c == kDLFloat6_e2m3fn as u8 => Some(7.5),
+        c if c == kDLFloat6_e3m2fn as u8 => Some(28.0),
+        _ => None,
+    }
+}
+
+/// The checks of C++ `FloatImm(ty, value)`: a scalar floating-point type whose range holds a
+/// finite `value`.
+fn check_float_imm(dtype: DLDataType, value: f64) -> Result<()> {
+    use support::{check_failed, compare_failed, CppDouble};
+    use tvm_ffi::VALUE_ERROR;
+    const FLOAT4_E2M1FN: u8 = tvm_ffi::DLDataTypeCode::kDLFloat4_e2m1fn as u8;
+    /// `ffi::DLExtDataTypeCode::kDLExtCustomBegin`.
+    const CUSTOM_BEGIN: u8 = 129;
+    if support::is_scalable_vector(dtype) || support::is_fixed_length_vector(dtype) {
+        let condition = "!value_ty.IsScalableVector() && !value_ty.IsFixedLengthVector()";
+        return Err(check_failed(VALUE_ERROR, condition, "FloatImm can only take scalar."));
+    }
+    let (code, bits) = (dtype.code, dtype.bits);
+    let float8 = float8_bound(code);
+    let float6 = float6_bound(code);
+    let supported = code == support::FLOAT
+        || float8.is_some()
+        || float6.is_some()
+        || (code == support::BFLOAT && bits == 16)
+        || (code == FLOAT4_E2M1FN && bits == 4)
+        || code >= CUSTOM_BEGIN;
+    let name = || support::dtype_name(dtype);
+    if !supported {
+        let condition = "value_ty.MatchesCode(DLDataTypeCode::kDLFloat, \
+                         DLDataTypeCode::kDLFloat8_e3m4, DLDataTypeCode::kDLFloat8_e4m3, \
+                         DLDataTypeCode::kDLFloat8_e4m3b11fnuz, DLDataTypeCode::kDLFloat8_e4m3fn, \
+                         DLDataTypeCode::kDLFloat8_e4m3fnuz, DLDataTypeCode::kDLFloat8_e5m2, \
+                         DLDataTypeCode::kDLFloat8_e5m2fnuz, DLDataTypeCode::kDLFloat8_e8m0fnu, \
+                         DLDataTypeCode::kDLFloat6_e2m3fn, DLDataTypeCode::kDLFloat6_e3m2fn) || \
+                         value_ty.MatchesElementType(DLDataTypeCode::kDLBfloat, 16) || \
+                         value_ty.MatchesElementType(DLDataTypeCode::kDLFloat4_e2m1fn, 4) || \
+                         static_cast<int>(code) >= \
+                         static_cast<int>(ffi::DLExtDataTypeCode::kDLExtCustomBegin)";
+        let message = format!("FloatImm supports only float, but {} was supplied.", name());
+        return Err(check_failed(VALUE_ERROR, condition, &message));
+    }
+    if value.is_infinite() || value.is_nan() {
+        return Ok(());
+    }
+    // The bound checked from below and how its message says so, and the bound from above.
+    let (low, high): ((&str, f64, &str), (&str, f64)) = if bits == 32 {
+        (
+            (
+                "value >= std::numeric_limits<float>::lowest()",
+                f32::MIN as f64,
+                "exceeds minimum of",
+            ),
+            ("value <= std::numeric_limits<float>::max()", f32::MAX as f64),
+        )
+    } else if code == support::FLOAT && bits == 16 {
+        (
+            ("value >= -support::kMaxFloat16", -65504.0, "exceeds minimum of"),
+            ("value <= support::kMaxFloat16", 65504.0),
+        )
+    } else if code == support::BFLOAT && bits == 16 {
+        const MAX_BFLOAT16: f64 = 3.895313892515354759047080037148786688e38;
+        (
+            ("value >= -support::kMaxBFloat16", -MAX_BFLOAT16, "exceeds minimum of"),
+            ("value <= support::kMaxBFloat16", MAX_BFLOAT16),
+        )
+    } else if let Some((bound, nonneg)) = float8 {
+        let low = match nonneg {
+            true => ("value >= 0", 0.0, "below zero for unsigned"),
+            false => ("value >= -bound", -bound, "below minimum of"),
+        };
+        (low, ("value <= bound", bound))
+    } else if let Some(bound) = float6 {
+        (("value >= -bound", -bound, "below minimum of"), ("value <= bound", bound))
+    } else if code == FLOAT4_E2M1FN {
+        (("value >= -bound", -6.0, "below minimum of"), ("value <= bound", 6.0))
+    } else {
+        return Ok(());
+    };
+    let failed = |condition: &str, bound: f64, what: &str| {
+        let message = format!("Literal value {} {what} {}", CppDouble(value), name());
+        compare_failed(VALUE_ERROR, condition, CppDouble(value), CppDouble(bound), &message)
+    };
+    if value < low.1 {
+        return Err(failed(low.0, low.1, low.2));
+    }
+    if value > high.1 {
+        return Err(failed(high.0, high.1, "exceeds maximum of"));
+    }
+    Ok(())
 }
 
 // tvm-ffi-stubgen(begin): object/ir.IntImm
@@ -687,16 +942,151 @@ tvm_ffi::impl_object_upcast!(IntImm => Expr, IntImm => Constant);
 
 impl IntImm {
     /// The integer constant `value` of the scalar integer or boolean type `dtype`, checked to fit
-    /// it (`ir.IntImm`).
+    /// it (C++ `IntImm(PrimType(dtype), value, loc)`).
     pub fn from_dtype(
         dtype: DLDataType,
         value: impl Into<BigInt>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.IntImm")
-            .call_tuple((dtype, value.into(), &loc.into()))?
-            .try_into()
+        let (value, ty) = (value.into(), PrimType::from_dtype(dtype)?);
+        check_int_imm(dtype, &value)?;
+        Ok(Self::new(loc.into(), ty.into(), value))
     }
+
+    /// The `int32` constant `value` at the unknown location, which every `i32` is
+    /// (C++ `IntImm::Int32(value)`).
+    pub fn int32(value: i32) -> Self {
+        Self::builtin(dtype::int(32), value)
+    }
+
+    /// The `int64` constant `value` at the unknown location, which every `i64` is
+    /// (C++ `IntImm::Int64(value)`).
+    pub fn int64(value: i64) -> Self {
+        Self::builtin(dtype::int(64), value)
+    }
+
+    /// The boolean constant `value` at the unknown location (C++ `IntImm::Bool(value)`).
+    pub fn bool(value: bool) -> Self {
+        Self::builtin(dtype::bool(), value)
+    }
+
+    /// [`IntImm::from_dtype`] of a value its type holds, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType, value: impl Into<BigInt>) -> Self {
+        support::infallible(Self::from_dtype(dtype, value, UnknownLoc::new()))
+    }
+}
+
+/// An `i32` is an `int32` constant, as C++ converts an `int` to a `PrimExpr`.
+impl From<i32> for IntImm {
+    fn from(value: i32) -> Self {
+        Self::int32(value)
+    }
+}
+
+/// An `i64` is an `int64` constant. (C++ converts an `int64_t` held by an `Any` to `int32` when
+/// the value fits, as [`prim::convert`](crate::ir::prim::convert) does.)
+impl From<i64> for IntImm {
+    fn from(value: i64) -> Self {
+        Self::int64(value)
+    }
+}
+
+/// A `bool` is a boolean constant, as C++ converts a `bool` to a `PrimExpr`.
+impl From<bool> for IntImm {
+    fn from(value: bool) -> Self {
+        Self::bool(value)
+    }
+}
+
+impl From<i32> for Expr {
+    fn from(value: i32) -> Self {
+        IntImm::int32(value).into()
+    }
+}
+
+impl From<i64> for Expr {
+    fn from(value: i64) -> Self {
+        IntImm::int64(value).into()
+    }
+}
+
+impl From<bool> for Expr {
+    fn from(value: bool) -> Self {
+        IntImm::bool(value).into()
+    }
+}
+
+/// The checks of C++ `IntImm(ty, value)`: a scalar integer or boolean type whose range holds
+/// `value`. The messages are built only when a check fails.
+fn check_int_imm(dtype: DLDataType, value: &BigInt) -> Result<()> {
+    use support::{check_failed, compare_failed};
+    use tvm_ffi::VALUE_ERROR;
+    let name = || support::dtype_name(dtype);
+    if support::is_scalable_vector(dtype) || support::is_fixed_length_vector(dtype) {
+        let condition = "!value_ty.IsScalableVector() && !value_ty.IsFixedLengthVector()";
+        let message = format!("IntImm can only take scalar, but {} was supplied.", name());
+        return Err(check_failed(VALUE_ERROR, condition, &message));
+    }
+    if !matches!(dtype.code, support::INT | support::UINT | support::BOOL) {
+        let condition = "value_ty.MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt, \
+                         DLDataTypeCode::kDLBool)";
+        let message =
+            format!("IntImm supports only int or uint or bool type, but {} was supplied.", name());
+        return Err(check_failed(VALUE_ERROR, condition, &message));
+    }
+    let bits = dtype.bits as u32;
+    if bits == 0 {
+        let message = "IntImm requires a positive integer width";
+        return Err(compare_failed(VALUE_ERROR, "bits > 0", bits, 0, message));
+    }
+    let zero = BigInt::from(0i64);
+    if dtype.code == support::UINT {
+        if *value < zero {
+            let message =
+                format!("Literal value {value} is negative for unsigned integer type {}", name());
+            return Err(compare_failed(VALUE_ERROR, "value >= 0", value, 0, &message));
+        }
+        let message = || format!("Literal value {value} exceeds maximum of {}", name());
+        if bits <= 64 {
+            if !value.to_u64().is_some_and(|small| bits == 64 || small < 1u64 << bits) {
+                let condition =
+                    "small.has_value() && (bits == 64 || *small < (uint64_t{1} << bits))";
+                return Err(check_failed(VALUE_ERROR, condition, &message()));
+            }
+        } else {
+            let limit = BigInt::from(1i64).try_shl(bits as i64)?;
+            if *value >= limit {
+                let condition = "value < ffi::BigInt(1) << bits";
+                return Err(compare_failed(VALUE_ERROR, condition, value, &limit, &message()));
+            }
+        }
+    } else if bits == 1 || dtype.code == support::BOOL {
+        if *value != zero && *value != BigInt::from(1i64) {
+            let message = format!("{value} exceeds range of {}", name());
+            return Err(check_failed(VALUE_ERROR, "value == 0 || value == 1", &message));
+        }
+    } else {
+        let message = || format!("Literal value {value} exceeds range of {}", name());
+        if bits <= 64 {
+            let half = 1i128 << (bits - 1);
+            let fits = value.to_i64().is_some_and(|small| {
+                bits == 64 || ((small as i128) >= -half && (small as i128) < half)
+            });
+            if !fits {
+                let condition = "small.has_value() && (bits == 64 || (*small >= -(int64_t{1} << \
+                                 (bits - 1)) && *small < (int64_t{1} << (bits - 1))))";
+                return Err(check_failed(VALUE_ERROR, condition, &message()));
+            }
+        } else {
+            let limit = BigInt::from(1i64).try_shl(bits as i64 - 1)?;
+            if *value < -limit.clone() || *value >= limit {
+                let condition = "value >= -limit && value < limit";
+                return Err(check_failed(VALUE_ERROR, condition, &message()));
+            }
+        }
+    }
+    Ok(())
 }
 
 // tvm-ffi-stubgen(begin): object/ir.GenericConst
@@ -755,15 +1145,31 @@ tvm_ffi::impl_object_upcast!(GenericConst => Expr, GenericConst => Constant);
 
 impl GenericConst {
     /// The constant `value` of type `ty`, checked to have a type and not to be a primitive literal
-    /// (`ir.GenericConst`).
+    /// (C++ `GenericConst(ty, value, loc)`).
     pub fn checked(
         ty: impl Into<Type>,
         value: impl Into<Any>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.GenericConst")
-            .call_tuple((&ty.into(), value.into(), &loc.into()))?
-            .try_into()
+        use TVMFFITypeIndex::*;
+        let (ty, value) = (ty.into(), value.into());
+        if ty.as_node::<MissingTypeObj>().is_some() {
+            let condition = "!ty.as<MissingType>().has_value()";
+            let message = "GenericConst requires an expression type";
+            return Err(support::check_failed(tvm_ffi::TYPE_ERROR, condition, message));
+        }
+        let primitive =
+            [kTVMFFIInt, kTVMFFIBigInt, kTVMFFIBool, kTVMFFIFloat, kTVMFFISmallStr, kTVMFFIStr]
+                .into_iter()
+                .any(|index| value.type_index() == index as i32);
+        if primitive {
+            let condition =
+                "!value.as<ffi::BigInt>() && !value.as<bool>() && !value.as<double>() && \
+                             !value.as<ffi::String>()";
+            let message = "Primitive literals use IntImm, FloatImm, or StringImm";
+            return Err(support::check_failed(tvm_ffi::TYPE_ERROR, condition, message));
+        }
+        Ok(Self::new(loc.into(), ty, value))
     }
 }
 
@@ -822,10 +1228,11 @@ tvm_ffi::impl_object_upcast!(DataTypeImm => Expr, DataTypeImm => Constant);
 // tvm-ffi-stubgen(end)
 
 impl DataTypeImm {
-    /// The data type `value` as a constant of type [`AnyType`](crate::ir::AnyType)
-    /// (`ir.DataTypeImm`).
-    pub fn from_dtype(value: DLDataType, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.DataTypeImm").call_tuple((value, &loc.into()))?.try_into()
+    /// The data type `value` as a constant of type [`AnyType`]
+    /// (C++ `DataTypeImm(value, loc)`).
+    pub fn from_dtype(value: DLDataType, loc: impl Into<Location>) -> Self {
+        let ty = AnyType::new(UnknownLoc::new().into()).into();
+        Self::new(loc.into(), ty, value)
     }
 }
 
@@ -884,12 +1291,11 @@ tvm_ffi::impl_object_upcast!(StringImm => Expr, StringImm => Constant);
 // tvm-ffi-stubgen(end)
 
 impl StringImm {
-    /// The string constant `value`, of type [`StringType`](crate::ir::StringType)
-    /// (`ir.StringImm`).
-    pub fn new(value: &str, loc: impl Into<Location>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.StringImm")
-            .call_tuple((String::from(value), &loc.into()))?
-            .try_into()
+    /// The string constant `value`, of type [`StringType`]
+    /// (C++ `StringImm(value, loc)`).
+    pub fn new(value: &str, loc: impl Into<Location>) -> Self {
+        let ty = StringType::new(UnknownLoc::new().into()).into();
+        Self::from_complete_fields(loc.into(), ty, String::from(value))
     }
 }
 
@@ -965,8 +1371,8 @@ tvm_ffi::impl_object_upcast!(Call => Expr);
 // tvm-ffi-stubgen(end)
 
 impl Call {
-    /// The call of `op` on `args`, of type `ty` or the type the operator infers when `None`
-    /// (`ir.Call`).
+    /// The call of `op` on `args`, of type `ty` or the type [`Call::reinfer_type`] gives it when
+    /// `None` (C++ `Call(ty, op, args, attrs, ty_args, loc)`). The call is not validated.
     pub fn new(
         ty: Option<&Type>,
         op: impl Into<Expr>,
@@ -975,31 +1381,52 @@ impl Call {
         ty_args: impl IntoIterator<Item = impl Into<Type>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (ty, op, attrs, loc) = (ty.cloned(), op.into(), attrs.cloned(), loc.into());
+        let (op, attrs, loc) = (op.into(), attrs.cloned(), loc.into());
         let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
         let ty_args = ty_args.into_iter().map(Into::into).collect::<Array<Type>>();
-        tvm_ffi::cached_global_func!("ir.Call")
-            .call_packed(&[
-                AnyView::from(&ty),
-                AnyView::from(&op),
-                AnyView::from(&args),
-                AnyView::from(&attrs),
-                AnyView::from(&ty_args),
-                AnyView::from(&loc),
-            ])?
-            .try_into()
+        if let Some(ty) = ty {
+            return Ok(Self::from_complete_fields(loc, ty.clone(), op, args, attrs, ty_args));
+        }
+        let call =
+            Self::from_complete_fields(loc, MissingType::new().into(), op, args, attrs, ty_args);
+        let ty = call.reinfer_type()?;
+        Ok(Self::from_complete_fields(
+            call.loc.clone(),
+            ty,
+            call.op.clone(),
+            call.args.clone(),
+            call.attrs.clone(),
+            call.ty_args.clone(),
+        ))
     }
 
-    /// Check the call against the contract its operator registered (`ir.CallValidate`).
+    /// Check the call against the contract its operator registered: the operator's validator, if
+    /// it has one (C++ `Call::Validate`).
     pub fn validate(&self) -> Result<()> {
-        tvm_ffi::cached_global_func!("ir.CallValidate").call_tuple((self,))?;
-        Ok(())
+        let Some(op) = self.op.as_node::<OpObj>() else { return Ok(()) };
+        if op.validator().type_index() == TVMFFITypeIndex::kTVMFFINone as i32 {
+            return Ok(());
+        }
+        support::NativeHook::from_any(op.validator().clone())?.call_void(self)
     }
 
-    /// The result type the operator infers from the current inputs, without changing the call
-    /// (`ir.CallReinferType`).
+    /// The result type the operator infers from the current inputs, without changing the call: its
+    /// `TFixedReturnType`, else what its `FInferType` infers; the return type of a callee of a
+    /// function type; otherwise a missing type (C++ `Call::ReinferType`).
     pub fn reinfer_type(&self) -> Result<Type> {
-        tvm_ffi::cached_global_func!("ir.CallReinferType").call_tuple((self,))?.try_into()
+        let Some(op) = self.op.as_node::<OpObj>() else {
+            return match self.op.ty.as_node::<FuncTypeObj>() {
+                Some(func_type) => Ok(func_type.ret_type.clone()),
+                None => Ok(MissingType::new().into()),
+            };
+        };
+        if let Some(fixed) = support::op_attr(op, "TFixedReturnType")? {
+            return fixed.try_into();
+        }
+        match support::NativeHook::of_op(op, "FInferType")? {
+            Some(infer) => infer.call_as(self),
+            None => Ok(MissingType::new().into()),
+        }
     }
 }
 
@@ -1114,15 +1541,10 @@ tvm_ffi::impl_object_upcast!(Var => Expr);
 // tvm-ffi-stubgen(end)
 
 impl Var {
-    /// The variable `name`, of type `ty` or a missing type when `None` (`ir.Var`).
-    pub fn new(name: &str, ty: Option<&Type>, loc: impl Into<Location>) -> Result<Self> {
-        let ty = match ty {
-            Some(ty) => ty.clone(),
-            None => crate::ir::r#type::MissingType::new()?.into(),
-        };
-        tvm_ffi::cached_global_func!("ir.Var")
-            .call_tuple((String::from(name), ty, &loc.into()))?
-            .try_into()
+    /// The variable `name` of type `ty` (C++ `Var(name, ty, loc)`); a variable whose type is not
+    /// known yet takes [`MissingType::new`].
+    pub fn new(name: &str, ty: impl Into<Type>, loc: impl Into<Location>) -> Self {
+        Self::from_complete_fields(loc.into(), ty.into(), String::from(name))
     }
 }
 
@@ -1182,16 +1604,17 @@ tvm_ffi::impl_object_upcast!(LambdaExpr => Expr, LambdaExpr => StagingExpr);
 // tvm-ffi-stubgen(end)
 
 impl LambdaExpr {
-    /// The lambda of `vars` that evaluates to `body` (`ir.LambdaExpr`).
+    /// The lambda of `vars` that evaluates to `body`, of the function type from the types of
+    /// `vars` to the type of `body` (C++ `LambdaExpr(vars, body, loc)`).
     pub fn new(
         vars: impl IntoIterator<Item = impl Into<Var>>,
         body: impl Into<Expr>,
         loc: impl Into<Location>,
-    ) -> Result<Self> {
-        let vars = vars.into_iter().map(Into::into).collect::<Array<Var>>();
-        tvm_ffi::cached_global_func!("ir.LambdaExpr")
-            .call_tuple((&vars, &body.into(), &loc.into()))?
-            .try_into()
+    ) -> Self {
+        let (vars, body) = (vars.into_iter().map(Into::into).collect::<Array<Var>>(), body.into());
+        let arg_types = vars.iter().map(|var| var.ty.clone()).collect::<Vec<Type>>();
+        let ty = FuncType::new(arg_types, body.ty.clone());
+        Self::from_complete_fields(loc.into(), ty.into(), vars, body)
     }
 
     /// The body with `arguments` substituted for the variables (`ir.LambdaExprApply`).
@@ -1251,33 +1674,50 @@ impl Range {
 // tvm-ffi-stubgen(end)
 
 impl Range {
-    /// The range `[begin, end)`, or `[0, begin)` when `end` is `None` (`ir.Range`).
+    /// The range `[begin, end)` (C++ `Range(begin, end, loc)`);
+    /// [`from_min_extent`](Self::from_min_extent) takes the extent instead of the end.
     pub fn new(
         begin: impl Into<Expr>,
-        end: Option<&Expr>,
+        end: impl Into<Expr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.Range")
-            .call_tuple((&begin.into(), end.cloned(), &loc.into()))?
-            .try_into()
+        let (begin, end) = (begin.into(), end.into());
+        let extent = Self::get_extent_from_begin_end(begin.clone(), end)?;
+        Ok(Self::from_complete_fields(begin, extent, loc.into()))
     }
 
-    /// The range of `extent` values from `min_value` (`ir.RangeFromMinExtent`).
+    /// The range of `extent` values from `min_value` (C++ `Range::FromMinExtent`).
     pub fn from_min_extent(
         min_value: impl Into<Expr>,
         extent: impl Into<Expr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.RangeFromMinExtent")
-            .call_tuple((&min_value.into(), &extent.into(), &loc.into()))?
-            .try_into()
+        let (min_value, extent) = (min_value.into(), extent.into());
+        support::prim_dtype(&min_value)?;
+        support::prim_dtype(&extent)?;
+        Ok(Self::from_complete_fields(min_value, extent, loc.into()))
     }
 
-    /// The extent `end - begin` of the range `[begin, end)`, simplified
-    /// (`ir.RangeGetExtentFromBeginEnd`).
+    /// The extent `end - begin` of the range `[begin, end)`: the other operand when `end` adds
+    /// `begin` to it, `end` when `begin` is zero, else `end - begin` folded
+    /// (C++ `Range::GetExtentFromBeginEnd`).
     pub fn get_extent_from_begin_end(begin: impl Into<Expr>, end: impl Into<Expr>) -> Result<Expr> {
-        tvm_ffi::cached_global_func!("ir.RangeGetExtentFromBeginEnd")
-            .call_tuple((&begin.into(), &end.into()))?
-            .try_into()
+        let (begin, end) = (begin.into(), end.into());
+        support::prim_dtype(&begin)?;
+        support::prim_dtype(&end)?;
+        if let Some(add) = end.as_node::<AddObj>() {
+            if crate::ir::prim::expr_deep_equal(add.a.clone(), begin.clone())? {
+                return Ok(add.b.clone());
+            }
+            if crate::ir::prim::expr_deep_equal(add.b.clone(), begin.clone())? {
+                return Ok(add.a.clone());
+            }
+        }
+        let is_zero =
+            begin.as_node::<IntImmObj>().is_some_and(|imm| imm.value == BigInt::from(0i64));
+        match is_zero {
+            true => Ok(end),
+            false => crate::ir::prim::op::sub(end, begin, UnknownLoc::new()),
+        }
     }
 }

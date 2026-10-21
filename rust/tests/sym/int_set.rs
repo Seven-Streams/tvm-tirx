@@ -19,11 +19,11 @@
 
 //! Tests of `sym::int_set`: integer sets and region bounds.
 
-use tvm_tirx::ir::{Expr, IntImm, Range, Var};
+use tvm_tirx::ir::{Expr, IntImm, Location, Range, Var};
 use tvm_tirx::sym::*;
 use tvm_tirx::tvm_ffi::{Map, Object, ObjectRefCast};
 
-use super::{fixture, imm, int32, loc, op, range, var, Fixture};
+use super::{fixture, int32, op, range, var, Fixture};
 use crate::common::{assert_type_contracts, global};
 
 #[test]
@@ -55,15 +55,14 @@ fn interval_sets_are_read_through_accessors() {
 
 #[test]
 fn int_sets() {
-    let analyzer = Analyzer::new().unwrap();
-    let interval = IntervalSet::new(int32(0), int32(10)).unwrap();
+    let analyzer = Analyzer::new();
+    let interval = IntervalSet::new(int32(0), int32(10));
     assert!(analyzer.can_prove_equal(interval.min_value().unwrap(), int32(0)).unwrap());
     let set: IntSet = interval.into();
     assert!(!set.is_nothing().unwrap());
     assert!(!set.is_everything().unwrap());
 
-    let everything: IntSet =
-        IntervalSet::new(neg_inf().unwrap(), pos_inf().unwrap()).unwrap().into();
+    let everything: IntSet = IntervalSet::new(neg_inf().unwrap(), pos_inf().unwrap()).into();
     assert!(everything.is_everything().unwrap());
 
     let x = var("x");
@@ -71,8 +70,8 @@ fn int_sets() {
     assert!(!IntSet::vector(&x).unwrap().is_everything().unwrap());
 
     let union = union_lower_bound([
-        IntervalSet::new(int32(0), int32(3)).unwrap(),
-        IntervalSet::new(int32(4), int32(7)).unwrap(),
+        IntervalSet::new(int32(0), int32(3)),
+        IntervalSet::new(int32(4), int32(7)),
     ])
     .unwrap();
     assert!(!union.is_nothing().unwrap());
@@ -94,12 +93,12 @@ fn int_sets() {
 fn region_bounds() {
     let x = var("x");
     let var_dom = Map::from_iter([(x.clone(), range(0, 16))]);
-    let region = [Range::from_complete_fields(x.clone().into(), int32(1), loc())];
-    let predicate = imm("bool", 1);
+    let region = [Range::from_complete_fields(x.clone().into(), int32(1), Location::unknown())];
+    let predicate = Expr::from(true);
 
     let lower = estimate_region_lower_bound(region.clone(), &var_dom, &predicate, None).unwrap();
     assert_eq!(lower.unwrap().len(), 1);
-    let analyzer = Analyzer::new().unwrap();
+    let analyzer = Analyzer::new();
     let strict =
         estimate_region_strict_bound(region.clone(), &var_dom, &predicate, Some(&analyzer))
             .unwrap();

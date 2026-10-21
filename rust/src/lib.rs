@@ -72,8 +72,24 @@
 //! as given, without the checks, defaults or derived fields of the native constructor. Where the
 //! native constructor does more than that (`ir::prim::Add` checks its operand types,
 //! `tirx::Function` derives its type from the signature), `new` is reserved for a constructor with
-//! those semantics, and the allocation of the fields as given is `from_complete_fields`. To build
-//! a node with the native semantics, call the native constructor through its global function.
+//! those semantics, and the allocation of the fields as given is `from_complete_fields`. The IR
+//! constructors are written in Rust after the C++ ones, with the same checks, defaults, derived
+//! fields and errors; they call into C++ only for the nodes C++ shares (`UnknownLoc`,
+//! `MissingType` and the `PrimType` of each dtype, fetched once per thread), for the hooks an
+//! operator or type registers (such as `FInferType`), and for printing in an error message.
+//! A constructor returns a `Result` when its C++ counterpart can throw, and the node itself
+//! otherwise: [`ir::Var::new`] or [`ir::UnknownLoc::new`] cannot fail, because the native calls
+//! they make are to functions the linked library registers, and a failure there is a mismatch
+//! between the crate and the library, which panics.
+//!
+//! The common types and constants have the short constructors C++ has: [`ir::PrimType::int`]
+//! and its siblings for `PrimType::Int(32)`, [`ir::IntImm::int32`], [`ir::IntImm::bool`] and
+//! [`ir::FloatImm::float32`] for the constants, [`ir::prim::make_const`] for a constant of any
+//! type, and the conversions of `i32`, `i64`, `bool`, `f32` and `f64` into an [`ir::Expr`] that
+//! C++ makes implicitly. [`ir::dtype`] spells the `DLDataType` of each (`dtype::int(32)`) without
+//! parsing a string.
+//! The unknown location is [`ir::UNKNOWN_LOC`] as a constructor argument and
+//! [`ir::Location::unknown`] as a value.
 //!
 //! # Generated and hand-written code
 //!

@@ -27,49 +27,30 @@ mod analyzer;
 mod int_set;
 mod iter_affine_map;
 
-use tvm_tirx::ir::{Expr, IntImm, Location, PrimType, Range, Var};
+use tvm_tirx::ir::{UNKNOWN_LOC, dtype, Expr, IntImm, Location, PrimType, Range, Var};
 use tvm_tirx::sym::Analyzer;
-use tvm_tirx::tvm_ffi::{BigInt, DLDataType, DLDataTypeExt, String as FfiString};
+use tvm_tirx::tvm_ffi::String as FfiString;
 
 use common::global;
 
-fn loc() -> Location {
-    global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap()
-}
-
-fn imm(dtype: &str, value: i64) -> Expr {
-    let dtype = DLDataType::try_from_str(dtype).unwrap();
-    let imm: IntImm = global("ir.IntImm")
-        .call_tuple((dtype, BigInt::from(value), loc()))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    imm.into()
-}
-
 fn int32(value: i64) -> Expr {
-    imm("int32", value)
+    IntImm::from_dtype(dtype::int(32), value, UNKNOWN_LOC).unwrap().into()
 }
 
 fn op(name: &str, a: impl Into<Expr>, b: impl Into<Expr>) -> Expr {
-    global(name).call_tuple((a.into(), b.into(), loc())).unwrap().try_into().unwrap()
+    global(name).call_tuple((a.into(), b.into(), Location::unknown())).unwrap().try_into().unwrap()
 }
 
 fn var(name: &str) -> Var {
-    let int32_ty: PrimType = global("ir.PrimType")
-        .call_tuple((DLDataType::try_from_str("int32").unwrap(),))
-        .unwrap()
-        .try_into()
-        .unwrap();
     global("ir.Var")
-        .call_tuple((FfiString::from(name), int32_ty, loc()))
+        .call_tuple((FfiString::from(name), PrimType::int(32), Location::unknown()))
         .unwrap()
         .try_into()
         .unwrap()
 }
 
 fn range(begin: i64, extent: i64) -> Range {
-    Range::from_complete_fields(int32(begin), int32(extent), loc())
+    Range::from_complete_fields(int32(begin), int32(extent), Location::unknown())
 }
 
 struct Fixture {

@@ -30,8 +30,10 @@
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -188,16 +190,38 @@ tvm_ffi::impl_object_upcast!(UnknownLoc => Location);
 // tvm-ffi-stubgen(end)
 
 impl UnknownLoc {
-    /// The shared unknown location (`ir.UnknownLoc`), which IR constructors default to.
-    pub fn new() -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.UnknownLoc").call_tuple(())?.try_into()
+    /// The shared unknown location (`ir.UnknownLoc`), which IR constructors default to, fetched
+    /// once per thread.
+    pub fn new() -> Self {
+        thread_local! {
+            static UNKNOWN_LOC: std::cell::OnceCell<UnknownLoc> = const { std::cell::OnceCell::new() };
+        }
+        support::shared(&UNKNOWN_LOC, || {
+            tvm_ffi::cached_global_func!("ir.UnknownLoc").call_tuple(())?.try_into()
+        })
     }
 }
 
 impl Location {
-    /// The shared [`UnknownLoc`], as a [`Location`]: Python's `UNKNOWN_LOC`.
-    pub fn unknown() -> Result<Self> {
-        UnknownLoc::new().map(Self::from)
+    /// The shared [`UnknownLoc`] as a [`Location`] value; [`UNKNOWN_LOC`] is the same location as
+    /// a constructor argument.
+    pub fn unknown() -> Self {
+        UnknownLoc::new().into()
+    }
+}
+
+/// The unknown location as the `loc` argument of a constructor, which takes any
+/// `impl Into<Location>`: `Var::new("x", ty, UNKNOWN_LOC)`. [`Location::unknown`] is the same
+/// location as a value.
+#[derive(Clone, Copy, Debug)]
+pub struct Unknown;
+
+/// The unknown location, as Python's `UNKNOWN_LOC`.
+pub const UNKNOWN_LOC: Unknown = Unknown;
+
+impl From<Unknown> for Location {
+    fn from(_: Unknown) -> Self {
+        Location::unknown()
     }
 }
 

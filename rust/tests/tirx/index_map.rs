@@ -19,17 +19,17 @@
 
 //! Tests of `tirx::index_map`.
 
-use tvm_tirx::ir::Expr;
+use tvm_tirx::ir::{dtype, Expr, PrimType};
 use tvm_tirx::tirx::IndexMap;
-use tvm_tirx::tvm_ffi::{Array, DLDataType, DLDataTypeExt, DLDevice, DLDeviceType};
+use tvm_tirx::tvm_ffi::{Array, DLDevice, DLDeviceType};
 
-use super::{as_i64, int32, op, prim_type, range, var};
+use super::{as_i64, int32, op, range, var};
 use crate::common::{serial, structural_equal};
 
 #[test]
 fn index_maps() {
     let _serial = serial();
-    let (i, j) = (var("i", prim_type("int32")), var("j", prim_type("int32")));
+    let (i, j) = (var("i", PrimType::int(32)), var("j", PrimType::int(32)));
     let transpose = IndexMap::new(
         Array::new(vec![i.clone(), j.clone()]),
         Array::new(vec![Expr::from(&j), Expr::from(&i)]),
@@ -42,7 +42,7 @@ fn index_maps() {
     let inverse = transpose.inverse([range(4), range(8)], None).unwrap();
     assert_eq!(inverse.final_indices.len(), 2);
 
-    let k = var("k", prim_type("int32"));
+    let k = var("k", PrimType::int(32));
     let split = IndexMap::new(
         Array::new(vec![k.clone()]),
         Array::new(vec![
@@ -56,9 +56,7 @@ fn index_maps() {
     assert!(!structural_equal(&predicate, &int32(0)));
 
     let cpu = DLDevice::new(DLDeviceType::kDLCPU, 0);
-    let tensor =
-        tvm_tirx::runtime::empty(&[4, 8], DLDataType::try_from_str("float32").unwrap(), cpu, None)
-            .unwrap();
+    let tensor = tvm_tirx::runtime::empty(&[4, 8], dtype::float(32), cpu, None).unwrap();
     let transposed = transpose.map_tensor(&tensor).unwrap();
     assert_eq!(transposed.shape(), &[8, 4]);
 }

@@ -24,7 +24,7 @@
 //! memory scope, shape, data alignment and optional layout of a tensor, built with
 //! [`TensorType::new`].
 
-// `custom-new` reserves `new` for a constructor with the native one's semantics (defaults); the
+// `custom-new` reserves `new` for a constructor with the C++ one's semantics (defaults); the
 // generated `from_complete_fields` allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): tirx.TensorType
 
@@ -33,7 +33,9 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
 // tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
@@ -42,6 +44,7 @@ use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::r#type::TypeObj;
+use crate::ir::support;
 use crate::runtime::MemoryScope;
 use crate::sym::analyzer::Analyzer;
 use crate::tirx::layout::Layout;
@@ -49,6 +52,7 @@ use std::ops::Deref;
 use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectCore;
 use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
@@ -124,10 +128,28 @@ impl TensorType {
 tvm_ffi::impl_object_upcast!(TensorType => Type);
 // tvm-ffi-stubgen(end)
 
+/// The runtime's allocation alignment (C++ `runtime::kAllocAlignment`, which a build may set),
+/// read from the default the reflection registers for `TensorType::data_alignment`.
+fn alloc_alignment() -> Result<i32> {
+    static ALLOC_ALIGNMENT: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    if let Some(alignment) = ALLOC_ALIGNMENT.get() {
+        return Ok(*alignment);
+    }
+    let Some(default) = support::field_default(TensorTypeObj::type_index(), "data_alignment")
+    else {
+        let message = "tirx.TensorType registers no default data_alignment";
+        return Err(tvm_ffi::Error::new(tvm_ffi::INTERNAL_ERROR, message, ""));
+    };
+    let alignment = i32::try_from(i64::try_from(default)?).map_err(|_| {
+        tvm_ffi::Error::new(tvm_ffi::INTERNAL_ERROR, "the default data_alignment exceeds i32", "")
+    })?;
+    Ok(*ALLOC_ALIGNMENT.get_or_init(|| alignment))
+}
+
 impl TensorType {
     /// The type of a tensor of `shape` and `dtype` in `scope`, aligned to `data_alignment` bytes
     /// (the runtime's allocation alignment when 0 or less), with `layout` if given
-    /// (`tirx.TensorType`).
+    /// (C++ `TensorType(shape, dtype, scope, data_alignment, layout, loc)`).
     pub fn new(
         shape: impl IntoIterator<Item = impl Into<Expr>>,
         dtype: impl Into<PrimType>,
@@ -137,17 +159,21 @@ impl TensorType {
         loc: impl Into<Location>,
     ) -> Result<Self> {
         let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
-        let (dtype, scope, loc) = (dtype.into(), scope.into(), loc.into());
-        tvm_ffi::cached_global_func!("tirx.TensorType")
-            .call_packed(&[
-                AnyView::from(&shape),
-                AnyView::from(&dtype),
-                AnyView::from(&scope),
-                AnyView::from(&data_alignment),
-                AnyView::from(&layout.cloned()),
-                AnyView::from(&loc),
-            ])?
-            .try_into()
+        for extent in shape.iter() {
+            support::prim_dtype(&extent)?;
+        }
+        let data_alignment = match data_alignment <= 0 {
+            true => alloc_alignment()?,
+            false => data_alignment,
+        };
+        Ok(Self::from_complete_fields(
+            loc.into(),
+            dtype.into(),
+            scope.into(),
+            shape,
+            data_alignment,
+            layout.cloned(),
+        ))
     }
 
     /// Whether the layout is absent or equals the default row-major layout of the shape

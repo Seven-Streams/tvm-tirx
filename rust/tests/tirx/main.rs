@@ -36,54 +36,34 @@ mod transform;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tvm_tirx::ir::{
-    BaseFunc, DictAttrs, Expr, GlobalInfo, GlobalVar, IRModule, IntImm, Location, PrimType, Range,
-    SeqStmt, Stmt, Type, Var,
+    Location, UNKNOWN_LOC, dtype, BaseFunc, DictAttrs, Expr, GlobalInfo, GlobalVar, IRModule,
+    IntImm, Range, SeqStmt, Stmt, Type, Var,
 };
 use tvm_tirx::runtime::MemoryScope;
 use tvm_tirx::tirx::{Axis, Function, Iter, TileLayout};
-use tvm_tirx::tvm_ffi::{
-    Array, BigInt, DLDataType, DLDataTypeExt, Map, ObjectRefCast, String as FfiString,
-};
+use tvm_tirx::tvm_ffi::{Array, Map, ObjectRefCast, String as FfiString};
 
 use common::global;
 
-fn loc() -> Location {
-    Location::unknown().unwrap()
-}
-
-fn prim_type(dtype: &str) -> PrimType {
-    global("ir.PrimType")
-        .call_tuple((DLDataType::try_from_str(dtype).unwrap(),))
-        .unwrap()
-        .try_into()
-        .unwrap()
-}
-
 fn int32(value: i64) -> Expr {
-    let dtype = DLDataType::try_from_str("int32").unwrap();
-    let imm: IntImm = global("ir.IntImm")
-        .call_tuple((dtype, BigInt::from(value), loc()))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    imm.into()
+    IntImm::from_dtype(dtype::int(32), value, UNKNOWN_LOC).unwrap().into()
 }
 
 fn var(name: &str, ty: impl Into<Type>) -> Var {
     global("ir.Var")
-        .call_tuple((FfiString::from(name), Some(ty.into()), loc()))
+        .call_tuple((FfiString::from(name), Some(ty.into()), Location::unknown()))
         .unwrap()
         .try_into()
         .unwrap()
 }
 
 fn op(name: &str, a: impl Into<Expr>, b: impl Into<Expr>) -> Expr {
-    global(name).call_tuple((a.into(), b.into(), loc())).unwrap().try_into().unwrap()
+    global(name).call_tuple((a.into(), b.into(), Location::unknown())).unwrap().try_into().unwrap()
 }
 
 fn range(extent: i64) -> Range {
     global("ir.Range")
-        .call_tuple((int32(0), Some(int32(extent)), loc()))
+        .call_tuple((int32(0), Some(int32(extent)), Location::unknown()))
         .unwrap()
         .try_into()
         .unwrap()
@@ -108,23 +88,22 @@ fn tile_8x8() -> TileLayout {
         Vec::<Iter>::new(),
         &Map::new(),
     )
-    .unwrap()
 }
 
 fn void_function(params: Vec<Var>) -> Function {
-    let zero = global("ir.Evaluate").call_tuple((int32(0), loc())).unwrap();
+    let zero = global("ir.Evaluate").call_tuple((int32(0), Location::unknown())).unwrap();
     let body: SeqStmt = global("ir.SeqStmt")
-        .call_tuple((Array::<Stmt>::new(vec![zero.try_into().unwrap()]), Some(loc())))
+        .call_tuple((Array::<Stmt>::new(vec![zero.try_into().unwrap()]), Some(Location::unknown())))
         .unwrap()
         .try_into()
         .unwrap();
     let missing: Type = global("ir.MissingType").call_tuple(()).unwrap().try_into().unwrap();
-    Function::new(params, Some(&body), missing, DictAttrs::new(Map::new()), loc()).unwrap()
+    Function::new(params, Some(&body), missing, DictAttrs::new(Map::new()), UNKNOWN_LOC)
 }
 
 fn module_of(name: &str, func: &Function) -> IRModule {
     let gv: GlobalVar = global("ir.GlobalVar")
-        .call_tuple((FfiString::from(name), loc()))
+        .call_tuple((FfiString::from(name), Location::unknown()))
         .unwrap()
         .try_into()
         .unwrap();

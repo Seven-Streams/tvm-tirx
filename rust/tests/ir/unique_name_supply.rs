@@ -26,7 +26,7 @@ use crate::common::serial;
 #[test]
 fn unique_names() {
     let _serial = serial();
-    let names = UniqueNameSupply::new("p").unwrap();
+    let names = UniqueNameSupply::new("p");
     let fresh = names.fresh_name("x", true, true).unwrap();
     assert!(names.contains_name(fresh.as_str(), false).unwrap());
     let again = names.fresh_name("x", true, true).unwrap();

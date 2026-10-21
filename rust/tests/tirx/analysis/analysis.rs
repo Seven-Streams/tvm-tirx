@@ -20,15 +20,16 @@
 //! Tests of `tirx::analysis::analysis`: memory accesses, undefined variables, linear patterns and
 //! well-formedness.
 
+use tvm_tirx::ir::PrimType;
 use tvm_tirx::tirx::analysis;
 
 use crate::common::{serial, structural_equal};
-use crate::{as_i64, int32, module_of, op, prim_type, var, void_function};
+use crate::{as_i64, int32, module_of, op, var, void_function};
 
 #[test]
 fn well_formedness() {
     let _serial = serial();
-    let func = void_function(vec![var("x", prim_type("int32"))]);
+    let func = void_function(vec![var("x", PrimType::int(32))]);
     assert!(analysis::verify_memory(&func).unwrap());
     assert!(analysis::check_well_formed(&func, false).unwrap());
     assert!(analysis::check_well_formed_module(module_of("main", &func), false).unwrap());
@@ -37,7 +38,7 @@ fn well_formedness() {
 #[test]
 fn expression_analyses() {
     let _serial = serial();
-    let (x, y) = (var("x", prim_type("int32")), var("y", prim_type("int32")));
+    let (x, y) = (var("x", PrimType::int(32)), var("y", PrimType::int(32)));
     let undefined = analysis::undefined_vars(op("prim._OpAdd", &x, &y), [x.clone()]).unwrap();
     assert_eq!(undefined.len(), 1);
     assert!(structural_equal(&undefined.get(0).unwrap(), &y));

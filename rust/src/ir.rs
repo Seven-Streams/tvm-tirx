@@ -32,6 +32,7 @@
 
 pub mod attrs;
 pub mod base;
+pub mod dtype;
 pub mod expr;
 pub mod function;
 pub mod global_info;
@@ -40,6 +41,7 @@ pub mod module;
 pub mod op;
 pub mod prim;
 pub mod stmt;
+pub(crate) mod support;
 pub mod transform;
 pub mod r#type;
 pub mod unique_name_supply;

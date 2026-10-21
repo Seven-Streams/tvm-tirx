@@ -54,10 +54,9 @@ fn instruments() {
             run_before_pass: Some(pass_hook(&log, "before")),
             run_after_pass: Some(pass_hook(&log, "after")),
         },
-    )
-    .unwrap();
+    );
     assert_eq!(probe.name().unwrap().as_str(), "probe");
-    let silent = BasePassInstrument::new("silent", PassInstrumentHooks::default()).unwrap();
+    let silent = BasePassInstrument::new("silent", PassInstrumentHooks::default());
 
     let ctx = PassContext::create(2, [""; 0], [""; 0], [&probe], None).unwrap();
     {

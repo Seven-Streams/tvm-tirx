@@ -85,7 +85,7 @@ fn rust_allocated_bounds_reach_the_native_analyzer() {
 
 #[test]
 fn bounds_and_simplification() {
-    let analyzer = Analyzer::new().unwrap();
+    let analyzer = Analyzer::new();
     let x = var("x");
     analyzer.bind_range(&x, &range(0, 16), false).unwrap();
 
@@ -111,7 +111,7 @@ fn bounds_and_simplification() {
 
 #[test]
 fn scopes_end_on_drop() {
-    let analyzer = Analyzer::new().unwrap();
+    let analyzer = Analyzer::new();
     let x = var("x");
     let x_mod_3 = op("prim._OpFloorMod", &x, int32(3));
     {

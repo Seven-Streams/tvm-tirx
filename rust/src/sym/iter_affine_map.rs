@@ -33,12 +33,14 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Range
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
+use crate::ir::support;
 use crate::sym::analyzer::Analyzer;
 use std::ops::Deref;
 use tvm_ffi::AnyView;
@@ -300,11 +302,13 @@ impl IterSumExpr {
     pub fn new(
         args: impl IntoIterator<Item = impl Into<IterSplitExpr>>,
         base: impl Into<Expr>,
-    ) -> Result<Self> {
+    ) -> Self {
         let args = args.into_iter().map(Into::into).collect::<Array<IterSplitExpr>>();
-        tvm_ffi::cached_global_func!("sym.IterSumExpr")
-            .call_tuple((&args, &base.into()))?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("sym.IterSumExpr")
+                .call_tuple((&args, &base.into()))
+                .and_then(|any| any.try_into()),
+        )
     }
 }
 

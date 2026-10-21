@@ -27,8 +27,10 @@
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -62,10 +64,12 @@ impl Deref for UniqueNameSupply {
 
 impl UniqueNameSupply {
     /// An empty supply whose names start with `prefix` (`ir.UniqueNameSupply`).
-    pub fn new(prefix: &str) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.UniqueNameSupply")
-            .call_tuple((String::from(prefix),))?
-            .try_into()
+    pub fn new(prefix: &str) -> Self {
+        support::infallible(
+            tvm_ffi::cached_global_func!("ir.UniqueNameSupply")
+                .call_tuple((String::from(prefix),))
+                .and_then(|any| any.try_into()),
+        )
     }
 
     /// A name derived from `name` that the supply has not given out, now reserved; `add_prefix`

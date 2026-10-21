@@ -24,9 +24,12 @@
 use std::mem::size_of;
 use std::sync::{Mutex, MutexGuard};
 
-use tvm_tirx::ir::{BaseFunc, GlobalInfo, GlobalVar, IRModule};
+use tvm_tirx::ir::{BaseFunc, Expr, GlobalInfo, GlobalVar, IRModule, MissingTypeObj, PrimTypeObj};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::{TVMFFIGetTypeInfo, TVMFFITypeInfo};
-use tvm_tirx::tvm_ffi::{AnyCompatible, AnyView, Array, Function, Map, ObjectCore, String as FfiString};
+use tvm_tirx::tvm_ffi::{
+    Any, AnyCompatible, AnyView, Array, Function, Map, ObjectCore, ObjectRefCore, Result,
+    String as FfiString,
+};
 
 /// Run the tests of a binary one at a time: registering an operator, a memory scope or the layout
 /// axes of a backend grows a native registry, which other threads must not read meanwhile, and
@@ -46,6 +49,78 @@ pub fn structural_equal<L: AnyCompatible, R: AnyCompatible>(lhs: &L, rhs: &R) ->
             AnyView::from(lhs),
             AnyView::from(rhs),
             AnyView::from(&false),
+            AnyView::from(&false),
+        ])
+        .unwrap();
+    bool::try_from(equal).unwrap()
+}
+
+/// The native function `name` on `args`.
+pub fn native(name: &str, args: &[AnyView]) -> Result<Any> {
+    global(name).call_packed(args)
+}
+
+/// Check that `rust`, built by a constructor written in Rust, agrees with `native`, built by the C++
+/// constructor it follows: nodes of the same class that are structurally equal, whose types are
+/// equal too, and are the same node when C++ shares it (a `PrimType` of the same dtype, the
+/// `MissingType` singleton); or errors of the same kind and message.
+pub fn agree<T: AnyCompatible>(what: &str, rust: Result<T>, native: Result<Any>) {
+    agree_up_to(false, what, rust, native)
+}
+
+/// [`agree`] for a fresh variable, which equals another only up to renaming (structural equality
+/// that maps free variables).
+pub fn agree_fresh<T: AnyCompatible>(what: &str, rust: Result<T>, native: Result<Any>) {
+    agree_up_to(true, what, rust, native)
+}
+
+fn agree_up_to<T: AnyCompatible>(
+    map_free_vars: bool,
+    what: &str,
+    rust: Result<T>,
+    native: Result<Any>,
+) {
+    match (rust, native) {
+        (Ok(rust), Ok(native)) => {
+            let rust = Any::from(rust);
+            assert_eq!(rust.type_index(), native.type_index(), "{what}: the node classes differ");
+            assert!(
+                any_structural_equal(&rust, &native, map_free_vars),
+                "{what}: the nodes differ"
+            );
+            if let (Ok(rust), Ok(native)) = (Expr::try_from(rust), Expr::try_from(native)) {
+                assert!(structural_equal(&rust.ty, &native.ty), "{what}: the types differ");
+                let shared = native.ty.as_node::<PrimTypeObj>().is_some()
+                    || native.ty.as_node::<MissingTypeObj>().is_some();
+                if shared {
+                    assert!(rust.ty.same_as(&native.ty), "{what}: the shared type is not shared");
+                }
+            }
+        }
+        (Err(rust), Err(native)) => {
+            assert_eq!(rust.kind(), native.kind(), "{what}: the error kinds differ");
+            assert_eq!(rust.message(), native.message(), "{what}: the error messages differ");
+        }
+        (Ok(_), Err(native)) => panic!("{what}: only the native constructor fails: {native}"),
+        (Err(rust), Ok(_)) => panic!("{what}: only the Rust constructor fails: {rust}"),
+    }
+}
+
+/// Check that both constructors fail with the same kind of error. For an argument the native
+/// function cannot convert, such as an expression that is not a `PrimExpr`, its message names the
+/// function signature instead of the constructor's check.
+pub fn agree_kind<T: AnyCompatible>(what: &str, rust: Result<T>, native: Result<Any>) {
+    let rust = rust.err().unwrap_or_else(|| panic!("{what}: the Rust constructor succeeds"));
+    let native = native.err().unwrap_or_else(|| panic!("{what}: the native constructor succeeds"));
+    assert_eq!(rust.kind(), native.kind(), "{what}: the error kinds differ: {rust} vs. {native}");
+}
+
+fn any_structural_equal(lhs: &Any, rhs: &Any, map_free_vars: bool) -> bool {
+    let equal = global("ffi.StructuralEqual")
+        .call_packed(&[
+            AnyView::from(lhs),
+            AnyView::from(rhs),
+            AnyView::from(&map_free_vars),
             AnyView::from(&false),
         ])
         .unwrap();

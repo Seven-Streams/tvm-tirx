@@ -39,6 +39,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Range
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::int_set::IntSet
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ExitOnDrop;
@@ -46,6 +47,7 @@ use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
+use crate::ir::support;
 use crate::sym::int_set::IntSet;
 use std::ops::Deref;
 use tvm_ffi::Error;
@@ -466,8 +468,12 @@ pub struct AllowUintAsIndexScope(ExitOnDrop);
 
 impl Analyzer {
     /// A fresh analyzer that knows no facts (`sym.Analyzer`).
-    pub fn new() -> Result<Self> {
-        tvm_ffi::cached_global_func!("sym.Analyzer").call_tuple(())?.try_into()
+    pub fn new() -> Self {
+        support::infallible(
+            tvm_ffi::cached_global_func!("sym.Analyzer")
+                .call_tuple(())
+                .and_then(|any| any.try_into()),
+        )
     }
 
     /// A copy of the analyzer and the facts it knows (`sym.AnalyzerClone`).

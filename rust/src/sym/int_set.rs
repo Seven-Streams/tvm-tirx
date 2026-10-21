@@ -31,11 +31,13 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Range
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
+use crate::ir::support;
 use crate::sym::analyzer::Analyzer;
 use std::ops::Deref;
 use tvm_ffi::Array;
@@ -139,10 +141,12 @@ impl IntSet {
 
 impl IntervalSet {
     /// The interval `[min_value, max_value]` (`sym.IntervalSet`).
-    pub fn new(min_value: impl Into<Expr>, max_value: impl Into<Expr>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("sym.IntervalSet")
-            .call_tuple((&min_value.into(), &max_value.into()))?
-            .try_into()
+    pub fn new(min_value: impl Into<Expr>, max_value: impl Into<Expr>) -> Self {
+        support::infallible(
+            tvm_ffi::cached_global_func!("sym.IntervalSet")
+                .call_tuple((&min_value.into(), &max_value.into()))
+                .and_then(|any| any.try_into()),
+        )
     }
 }
 

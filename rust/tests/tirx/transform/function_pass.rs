@@ -40,14 +40,12 @@ fn function_passes() {
             Ok(Some(func))
         },
         PassInfo::new(0, "rust.Count".into()),
-    )
-    .unwrap();
+    );
     let out = Pass::from(&counting).run(module_of("main", &func)).unwrap();
     assert_eq!(runs.load(Ordering::Relaxed), 1);
     assert!(out.contains("main").unwrap());
     let dropping =
-        FunctionPass::new(|_func, _module, _ctx| Ok(None), PassInfo::new(0, "rust.Drop".into()))
-            .unwrap();
+        FunctionPass::new(|_func, _module, _ctx| Ok(None), PassInfo::new(0, "rust.Drop".into()));
     assert!(!Pass::from(&dropping)
         .run(module_of("main", &func))
         .unwrap()

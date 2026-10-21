@@ -21,29 +21,47 @@
 //! Types: primitive, pointer, tuple, function and the special types.
 //!
 //! The objects `python/tvm_tirx/ir/type.py` defines. [`Type`] is the base of every type; a dialect
-//! extends it, as [`TensorType`](crate::tirx::TensorType) does. The native constructors are `new`,
-//! `instance` for the shared types and [`PrimType::from_dtype`].
+//! extends it, as [`TensorType`](crate::tirx::TensorType) does. The constructors are `new`, written
+//! in Rust after the C++ ones; the shared types ([`MissingType::new`], [`NoneType::new`],
+//! [`TensorRegionType::new`] and [`PrimType::from_dtype`]) are the nodes C++ shares, fetched once
+//! per thread. The common
+//! primitive types are [`PrimType::int`], [`PrimType::float`], [`PrimType::bool`] and their
+//! siblings, as C++ writes `PrimType::Int(32)`.
 
-// `custom-new` reserves `new` for a constructor with the native one's semantics (defaults, the
-// shared `MissingType` instance); the generated `from_complete_fields` allocates the fields as
-// given.
+// `custom-new` reserves `new` for a constructor with the C++ one's semantics (defaults, the shared
+// `MissingType`, `NoneType` and `TensorRegionType` nodes); the generated `from_complete_fields`
+// allocates the fields as given.
 // tvm-ffi-stubgen(custom-new): ir.MissingType
+// tvm-ffi-stubgen(custom-new): ir.NoneType
+// tvm-ffi-stubgen(custom-new): ir.TensorRegionType
 // tvm-ffi-stubgen(custom-new): ir.PtrType
 // tvm-ffi-stubgen(custom-new): ir.TupleType
 // tvm-ffi-stubgen(custom-new): ir.FuncType
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::location::UnknownLoc
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::dtype
+// tvm-ffi-stubgen(import-object): tvm_ffi::Error
+// tvm-ffi-stubgen(import-object): tvm_ffi::VALUE_ERROR
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::dtype;
 use crate::ir::location::Location;
+use crate::ir::location::UnknownLoc;
+use crate::ir::support;
 use crate::runtime::MemoryScope;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::DLDataType;
+use tvm_ffi::Error;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
+use tvm_ffi::VALUE_ERROR;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/ir.Type
@@ -144,9 +162,15 @@ tvm_ffi::impl_object_upcast!(MissingType => Type);
 // tvm-ffi-stubgen(end)
 
 impl MissingType {
-    /// The shared type of a node whose type is not known yet (`ir.MissingType`).
-    pub fn new() -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.MissingType").call_tuple(())?.try_into()
+    /// The shared type of a node whose type is not known yet (`ir.MissingType`), fetched once per
+    /// thread.
+    pub fn new() -> Self {
+        thread_local! {
+            static MISSING_TYPE: std::cell::OnceCell<MissingType> = const { std::cell::OnceCell::new() };
+        }
+        support::shared(&MISSING_TYPE, || {
+            tvm_ffi::cached_global_func!("ir.MissingType").call_tuple(())?.try_into()
+        })
     }
 }
 
@@ -194,7 +218,7 @@ impl NoneTypeObj {
 
 impl NoneType {
     /// Lossless complete-field allocation.
-    pub fn new(loc: Location) -> Self {
+    pub fn from_complete_fields(loc: Location) -> Self {
         let obj = NoneTypeObj::new(loc);
         Self { base: ObjectArc::new(obj) }
     }
@@ -205,8 +229,13 @@ tvm_ffi::impl_object_upcast!(NoneType => Type);
 
 impl NoneType {
     /// The shared type of the `None` value (`ir.NoneType`).
-    pub fn instance() -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.NoneType").call_tuple(())?.try_into()
+    pub fn new() -> Self {
+        thread_local! {
+            static NONE_TYPE: std::cell::OnceCell<NoneType> = const { std::cell::OnceCell::new() };
+        }
+        support::shared(&NONE_TYPE, || {
+            tvm_ffi::cached_global_func!("ir.NoneType").call_tuple(())?.try_into()
+        })
     }
 }
 
@@ -309,7 +338,7 @@ impl TensorRegionTypeObj {
 
 impl TensorRegionType {
     /// Lossless complete-field allocation.
-    pub fn new(loc: Location) -> Self {
+    pub fn from_complete_fields(loc: Location) -> Self {
         let obj = TensorRegionTypeObj::new(loc);
         Self { base: ObjectArc::new(obj) }
     }
@@ -320,8 +349,14 @@ tvm_ffi::impl_object_upcast!(TensorRegionType => Type);
 
 impl TensorRegionType {
     /// The shared type of a tensor region (`ir.TensorRegionType`).
-    pub fn instance() -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.TensorRegionType").call_tuple(())?.try_into()
+    pub fn new() -> Self {
+        thread_local! {
+            static TENSOR_REGION_TYPE: std::cell::OnceCell<TensorRegionType> =
+                const { std::cell::OnceCell::new() };
+        }
+        support::shared(&TENSOR_REGION_TYPE, || {
+            tvm_ffi::cached_global_func!("ir.TensorRegionType").call_tuple(())?.try_into()
+        })
     }
 }
 
@@ -379,7 +414,7 @@ tvm_ffi::impl_object_upcast!(OpaqueType => Type);
 // tvm-ffi-stubgen(end)
 
 // `ir.OpaqueType` allocates a fresh type at the unknown location: the generated
-// `OpaqueType::new(Location::unknown()?)` is the same.
+// `OpaqueType::new(Location::unknown())` is the same.
 
 // tvm-ffi-stubgen(begin): object/ir.PrimType
 /// Complete: reflected fields fill [32, 40) exactly (alignment padding [36, 40)).
@@ -436,10 +471,76 @@ tvm_ffi::impl_object_upcast!(PrimType => Type);
 // tvm-ffi-stubgen(end)
 
 impl PrimType {
-    /// The primitive type of `dtype`, shared for the common scalars and checked to be a valid
-    /// primitive type (`ir.PrimType`).
+    /// The primitive type of `dtype`, checked to be a valid primitive type (`ir.PrimType`). C++
+    /// keeps one node per dtype and thread, so the node of each dtype is fetched once per thread.
     pub fn from_dtype(dtype: DLDataType) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.PrimType").call_tuple((dtype,))?.try_into()
+        thread_local! {
+            static PRIM_TYPES: std::cell::RefCell<std::collections::HashMap<(u8, u8, u16), PrimType>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
+        let key = (dtype.code, dtype.bits, dtype.lanes);
+        if let Some(ty) = PRIM_TYPES.with(|types| types.borrow().get(&key).cloned()) {
+            return Ok(ty);
+        }
+        let ty: Self =
+            tvm_ffi::cached_global_func!("ir.PrimType").call_tuple((dtype,))?.try_into()?;
+        PRIM_TYPES.with(|types| types.borrow_mut().insert(key, ty.clone()));
+        Ok(ty)
+    }
+
+    /// [`PrimType::from_dtype`] of a dtype C++ always accepts, which fails only when the compiler
+    /// library is not loaded.
+    fn builtin(dtype: DLDataType) -> Self {
+        support::infallible(Self::from_dtype(dtype))
+    }
+
+    /// The signed integer type of `bits` bits (C++ `PrimType::Int(bits)`).
+    pub fn int(bits: u8) -> Self {
+        Self::builtin(dtype::int(bits))
+    }
+
+    /// The unsigned integer type of `bits` bits (C++ `PrimType::UInt(bits)`).
+    pub fn uint(bits: u8) -> Self {
+        Self::builtin(dtype::uint(bits))
+    }
+
+    /// The IEEE floating-point type of `bits` bits (C++ `PrimType::Float(bits)`).
+    pub fn float(bits: u8) -> Self {
+        Self::builtin(dtype::float(bits))
+    }
+
+    /// The brain floating-point type of `bits` bits (C++ `PrimType::BFloat(bits)`).
+    pub fn bfloat(bits: u8) -> Self {
+        Self::builtin(dtype::bfloat(bits))
+    }
+
+    /// The boolean type (C++ `PrimType::Bool()`).
+    pub fn bool() -> Self {
+        Self::builtin(dtype::bool())
+    }
+
+    /// The void type (C++ `PrimType::Void()`).
+    pub fn void() -> Self {
+        Self::builtin(dtype::void())
+    }
+
+    /// The vector of `lanes` elements of this scalar type (C++ `PrimType::Int(bits, lanes)` and
+    /// `WithLanes(lanes)`), with the C++ checks of the result: `PrimType::float(16).with_lanes(4)`
+    /// is `float16x4`, and `PrimType::void().with_lanes(4)` is an error. `lanes` is a fixed
+    /// count, below 32768; [`with_scalable_lanes`](Self::with_scalable_lanes) builds the scalable
+    /// vectors.
+    pub fn with_lanes(&self, lanes: u16) -> Result<Self> {
+        if i16::try_from(lanes).is_err() {
+            let message = format!("a fixed-length vector has fewer than 32768 lanes, not {lanes}");
+            return Err(Error::new(VALUE_ERROR, &message, ""));
+        }
+        Self::from_dtype(dtype::with_lanes(self.dtype, lanes))
+    }
+
+    /// The scalable vector of `factor` times `vscale` elements of this scalar type, with the C++
+    /// checks of the factor (C++ `PrimType::ScalableVector(code, bits, factor)`).
+    pub fn with_scalable_lanes(&self, factor: u16) -> Result<Self> {
+        Self::from_dtype(support::scalable_vector(self.dtype, i32::from(factor))?)
     }
 }
 
@@ -497,7 +598,7 @@ tvm_ffi::impl_object_upcast!(StringType => Type);
 // tvm-ffi-stubgen(end)
 
 // `ir.StringType` allocates a fresh type at the unknown location: the generated
-// `StringType::new(Location::unknown()?)` is the same.
+// `StringType::new(Location::unknown())` is the same.
 
 // tvm-ffi-stubgen(begin): object/ir.PtrType
 /// Complete: reflected fields fill [32, 48) exactly.
@@ -556,11 +657,15 @@ tvm_ffi::impl_object_upcast!(PtrType => Type);
 
 impl PtrType {
     /// A pointer to `element_type` in the memory `scope`; the element type must not be missing
-    /// (`ir.PtrType`).
+    /// (C++ `PtrType(element_type, scope)`).
     pub fn new(element_type: impl Into<Type>, scope: &MemoryScope) -> Result<Self> {
-        tvm_ffi::cached_global_func!("ir.PtrType")
-            .call_tuple((&element_type.into(), scope))?
-            .try_into()
+        let element_type = element_type.into();
+        if element_type.as_node::<MissingTypeObj>().is_some() {
+            let condition = "!element_type.as<MissingType>().has_value()";
+            let message = "PtrType element_type cannot be Type::Missing()";
+            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, message));
+        }
+        Ok(Self::from_complete_fields(UnknownLoc::new().into(), element_type, scope.clone()))
     }
 }
 
@@ -619,13 +724,13 @@ tvm_ffi::impl_object_upcast!(TupleType => Type);
 // tvm-ffi-stubgen(end)
 
 impl TupleType {
-    /// The type of a tuple of `fields` (`ir.TupleType`).
+    /// The type of a tuple of `fields` (C++ `TupleType(fields, loc)`).
     pub fn new(
         fields: impl IntoIterator<Item = impl Into<Type>>,
         loc: impl Into<Location>,
-    ) -> Result<Self> {
+    ) -> Self {
         let fields = fields.into_iter().map(Into::into).collect::<Array<Type>>();
-        tvm_ffi::cached_global_func!("ir.TupleType").call_tuple((&fields, &loc.into()))?.try_into()
+        Self::from_complete_fields(loc.into(), fields)
     }
 }
 
@@ -685,14 +790,12 @@ tvm_ffi::impl_object_upcast!(FuncType => Type);
 // tvm-ffi-stubgen(end)
 
 impl FuncType {
-    /// The type of a function from `arg_types` to `ret_type` (`ir.FuncType`).
+    /// The type of a function from `arg_types` to `ret_type` (C++ `FuncType(arg_types, ret_type)`).
     pub fn new(
         arg_types: impl IntoIterator<Item = impl Into<Type>>,
         ret_type: impl Into<Type>,
-    ) -> Result<Self> {
+    ) -> Self {
         let arg_types = arg_types.into_iter().map(Into::into).collect::<Array<Type>>();
-        tvm_ffi::cached_global_func!("ir.FuncType")
-            .call_tuple((&arg_types, &ret_type.into()))?
-            .try_into()
+        Self::from_complete_fields(UnknownLoc::new().into(), arg_types, ret_type.into())
     }
 }

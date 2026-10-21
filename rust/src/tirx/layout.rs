@@ -32,9 +32,11 @@
 // tvm-ffi-stubgen(import-object): crate::tirx::thread_scope::ThreadScope
 // tvm-ffi-stubgen(import-object): tvm_ffi::Any
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::support;
 use crate::sym::analyzer::Analyzer;
 use crate::tirx::thread_scope::ThreadScope;
 use std::ops::Deref;
@@ -396,12 +398,14 @@ impl TileLayout {
         shard: impl IntoIterator<Item = impl Into<Iter>>,
         replica: impl IntoIterator<Item = impl Into<Iter>>,
         offset: &Map<Axis, Expr>,
-    ) -> Result<Self> {
+    ) -> Self {
         let shard = shard.into_iter().map(Into::into).collect::<Array<Iter>>();
         let replica = replica.into_iter().map(Into::into).collect::<Array<Iter>>();
-        tvm_ffi::cached_global_func!("tirx.TileLayout")
-            .call_tuple((&shard, &replica, offset))?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("tirx.TileLayout")
+                .call_tuple((&shard, &replica, offset))
+                .and_then(|any| any.try_into()),
+        )
     }
 
     /// Whether the layout describes contiguous row-major memory

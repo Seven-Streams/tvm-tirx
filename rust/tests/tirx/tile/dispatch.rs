@@ -19,21 +19,21 @@
 
 //! Tests of `tirx::tile::dispatch`: the context tile instructions are dispatched in.
 
-use tvm_tirx::ir::{Expr, Stmt, Var};
+use tvm_tirx::ir::{Location, UNKNOWN_LOC, Expr, PrimType, Stmt, Var};
 use tvm_tirx::target::Target;
 use tvm_tirx::tirx::tile::DispatchContext;
 use tvm_tirx::tirx::{TensorType, ThreadScope};
 use tvm_tirx::tvm_ffi::{Any, Map, ObjectRefCast, String as FfiString};
 
 use crate::common::{global, serial, structural_equal};
-use crate::{int32, loc, memory_scope, prim_type, var};
+use crate::{int32, memory_scope, var};
 
 #[test]
 fn dispatch_contexts() {
     let _serial = serial();
     let target = Target::new("cuda").unwrap();
     let warp = ThreadScope::get("cuda.warp").unwrap();
-    let tx_var = var("tx", prim_type("int32"));
+    let tx_var = var("tx", PrimType::int(32));
     let ctx = DispatchContext::new(
         &target,
         &warp,
@@ -55,12 +55,16 @@ fn dispatch_contexts() {
     let cached = ctx.cache_get("key").unwrap().unwrap();
     assert!(structural_equal(&cached.try_cast::<Var>().unwrap(), &tx_var));
 
-    let stmt: Stmt =
-        global("ir.Evaluate").call_tuple((int32(0), loc())).unwrap().try_into().unwrap();
+    let stmt: Stmt = global("ir.Evaluate")
+        .call_tuple((int32(0), Location::unknown()))
+        .unwrap()
+        .try_into()
+        .unwrap();
     ctx.add_init_stmt(&stmt, false).unwrap();
     ctx.add_init_stmt(&stmt, true).unwrap();
     let scope = memory_scope();
-    let ty = TensorType::new([int32(4)], prim_type("float32"), &scope, 0, None, loc()).unwrap();
+    let ty =
+        TensorType::new([int32(4)], PrimType::float(32), &scope, 0, None, UNKNOWN_LOC).unwrap();
     let tensor = var("T", &ty);
     ctx.add_alloc_tensor(&tensor, Vec::<Expr>::new(), &Map::<FfiString, Any>::new()).unwrap();
     ctx.add_post_tensor_def_stmt(&tensor, &stmt).unwrap();

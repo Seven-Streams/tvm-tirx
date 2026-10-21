@@ -33,9 +33,11 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Function
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
+// tvm-ffi-stubgen(import-object): crate::ir::support
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::module::IRModule;
+use crate::ir::support;
 use crate::ir::transform::core::PassInfo;
 use crate::ir::transform::core::PassInstrument;
 use crate::ir::transform::core::PassInstrumentObj;
@@ -106,7 +108,7 @@ pub struct PassInstrumentHooks {
 
 impl BasePassInstrument {
     /// The instrument `name` that calls `hooks` (`transform.PassInstrument`).
-    pub fn new(name: &str, hooks: PassInstrumentHooks) -> Result<Self> {
+    pub fn new(name: &str, hooks: PassInstrumentHooks) -> Self {
         let PassInstrumentHooks {
             enter_pass_ctx,
             exit_pass_ctx,
@@ -119,16 +121,18 @@ impl BasePassInstrument {
         let should_run = should_run.map(Function::from_typed);
         let run_before_pass = run_before_pass.map(Function::from_typed);
         let run_after_pass = run_after_pass.map(Function::from_typed);
-        tvm_ffi::cached_global_func!("transform.PassInstrument")
-            .call_packed(&[
-                AnyView::from(&String::from(name)),
-                AnyView::from(&enter_pass_ctx),
-                AnyView::from(&exit_pass_ctx),
-                AnyView::from(&should_run),
-                AnyView::from(&run_before_pass),
-                AnyView::from(&run_after_pass),
-            ])?
-            .try_into()
+        support::infallible(
+            tvm_ffi::cached_global_func!("transform.PassInstrument")
+                .call_packed(&[
+                    AnyView::from(&String::from(name)),
+                    AnyView::from(&enter_pass_ctx),
+                    AnyView::from(&exit_pass_ctx),
+                    AnyView::from(&should_run),
+                    AnyView::from(&run_before_pass),
+                    AnyView::from(&run_after_pass),
+                ])
+                .and_then(|any| any.try_into()),
+        )
     }
 }
 

@@ -35,12 +35,30 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 // tvm-ffi-stubgen(import-object): crate::ir::location::Location
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
+// tvm-ffi-stubgen(import-object): crate::ir::prim::expr::BitwiseNot
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntImm
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::Broadcast
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::vscale_lanes
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::dtype::with_lanes
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::ConstValue
+// tvm-ffi-stubgen(import-object): crate::ir::prim::vector_expr::make_const_scalar
+// tvm-ffi-stubgen(import-object): tvm_ffi::BigInt
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::ir::dtype::with_lanes;
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntImm;
 use crate::ir::location::Location;
+use crate::ir::prim::expr::BitwiseNot;
+use crate::ir::prim::vector_expr::Broadcast;
+use crate::ir::prim::vector_expr::ConstValue;
+use crate::ir::prim::vector_expr::make_const_scalar;
+use crate::ir::prim::vector_expr::vscale_lanes;
 use crate::ir::r#type::PrimType;
+use crate::ir::support;
 use tvm_ffi::Any;
+use tvm_ffi::BigInt;
 use tvm_ffi::Error;
 use tvm_ffi::Result;
 use tvm_ffi::VALUE_ERROR;
@@ -248,9 +266,9 @@ pub fn shift_right(
 }
 
 /// The node `~x`, which, unlike the other operators, neither promotes nor folds
-/// (`prim.BitwiseNot`).
+/// ([`BitwiseNot::new`]).
 pub fn bitwise_not(x: impl Into<Expr>, loc: impl Into<Location>) -> Result<Expr> {
-    tvm_ffi::cached_global_func!("prim.BitwiseNot").call_tuple((&x.into(), &loc.into()))?.try_into()
+    Ok(BitwiseNot::new(x, loc)?.into())
 }
 
 /// The conjunction of `conds`, which must not be empty (`prim._OpAnd`).
@@ -379,4 +397,27 @@ pub fn max_value(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<Ex
 /// The positive infinity of `ty` (`prim.infinity`).
 pub fn infinity(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<Expr> {
     tvm_ffi::cached_global_func!("prim.infinity").call_tuple((&ty.into(), &loc.into()))?.try_into()
+}
+
+/// The constant `value` of type `ty`: an [`IntImm`] of an integer or boolean type, a [`FloatImm`]
+/// of a floating-point type, and the scalar constant broadcast over the lanes of a vector type
+/// (C++ `prim::MakeConst(ty, value, loc)`, which has no global function). An unsigned type takes
+/// no negative value. Prefer [`IntImm::from_dtype`] or [`FloatImm::from_dtype`] when the kind of
+/// the type is known.
+///
+/// [`FloatImm`]: crate::ir::FloatImm
+/// [`FloatImm::from_dtype`]: crate::ir::FloatImm::from_dtype
+pub fn make_const(ty: impl Into<PrimType>, value: i64, loc: impl Into<Location>) -> Result<Expr> {
+    let (ty, loc) = (ty.into(), loc.into());
+    let dtype = ty.dtype;
+    let value = ConstValue::Int(BigInt::from(value));
+    if !support::is_scalable_vector(dtype) && !support::is_fixed_length_vector(dtype) {
+        return make_const_scalar(dtype, value, &loc);
+    }
+    let scalar = make_const_scalar(with_lanes(dtype, 1), value, &loc)?;
+    let lanes = match support::is_fixed_length_vector(dtype) {
+        true => IntImm::int32(support::lanes(dtype)?).into(),
+        false => vscale_lanes(-i32::from(support::encoded_lanes(dtype)))?,
+    };
+    Ok(Broadcast::new(scalar, lanes, loc)?.into())
 }
