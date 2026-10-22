@@ -27,6 +27,7 @@ name = "tvm_tirx"
 
 [dependencies]
 tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
+tvm-tirx-macros = { path = "macros" }
 
 # Standalone crate: not a member of any enclosing workspace.
 [workspace]

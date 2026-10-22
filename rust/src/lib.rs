@@ -33,6 +33,7 @@
 //! - [`runtime`]: the runtime objects the IR refers to, tensor allocation and runtime queries.
 //! - [`codegen`]: compilation of IR modules into runtime modules, and the LLVM backend queries.
 //! - [`script`]: printing IR objects as TVMScript.
+//! - [`ty`]: defining IR types, the types of expressions, in Rust with [`tirx_type`].
 //!
 //! # Using the bindings
 //!
@@ -189,5 +190,7 @@ pub mod script;
 pub mod sym;
 pub mod target;
 pub mod tirx;
+pub mod ty;
 
 pub use tvm_ffi;
+pub use tvm_tirx_macros::tirx_type;
