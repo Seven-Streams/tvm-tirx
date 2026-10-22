@@ -88,8 +88,8 @@ impl ArgumentInfoObj {
 
 impl ArgumentInfo {
     /// Lossless complete-field allocation.
-    pub fn new(name: String, doc: String) -> Self {
-        let obj = ArgumentInfoObj::new(name, doc);
+    pub fn new(name: impl Into<String>, doc: impl Into<String>) -> Self {
+        let obj = ArgumentInfoObj::new(name.into(), doc.into());
         Self { base: ObjectArc::new(obj) }
     }
 }
