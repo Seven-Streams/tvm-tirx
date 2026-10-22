@@ -19,9 +19,17 @@
 
 //! Tests of `ir::unique_name_supply`.
 
-use tvm_tirx::ir::UniqueNameSupply;
+use tvm_tirx::ir::{UniqueNameSupply, UniqueNameSupplyObj};
+use tvm_tirx::tvm_ffi::Object;
 
-use crate::common::serial;
+use crate::common::{assert_type_contracts, serial};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    // Opaque bindings embed only their parent; the native object is larger.
+    assert_type_contracts!(false; UniqueNameSupplyObj: Object);
+}
 
 #[test]
 fn unique_names() {

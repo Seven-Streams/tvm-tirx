@@ -20,10 +20,23 @@
 //! Tests of `ir::stmt`.
 
 use tvm_tirx::ir::*;
-use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
+use tvm_tirx::tvm_ffi::{
+    Any, Array, BigInt, DLDataType, DLDataTypeExt, Map, Object, ObjectRefCore, String as FfiString,
+};
 
 use super::{int32, int32_var, op, seq, tensor_var};
-use crate::common::{agree, native, serial, structural_equal};
+use crate::common::{agree, assert_type_contracts, global, native, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true;
+        StmtObj: Object, AssertStmtObj: StmtObj, BindObj: StmtObj, BreakObj: StmtObj,
+        ContinueObj: StmtObj, EvaluateObj: StmtObj, ForObj: StmtObj, IfObj: StmtObj,
+        RegionStmtObj: StmtObj, ReturnObj: StmtObj, SeqStmtObj: StmtObj, TensorStoreObj: StmtObj,
+        WhileObj: StmtObj,
+    );
+}
 
 #[test]
 fn statements() {
@@ -369,4 +382,56 @@ fn regions_agree_with_cpp() {
         let rust = RegionStmt::new(op, args, params, attrs, &body, results, UNKNOWN_LOC);
         agree(what, rust, native_region);
     }
+}
+
+#[test]
+fn with_fields_copy_the_node_and_keep_the_rest() {
+    let _serial = serial();
+    let int32 = DLDataType::try_from_str("int32").unwrap();
+    let loc: Location = global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap();
+    let int_imm = |value: i64| -> Expr {
+        let imm: IntImm = global("ir.IntImm")
+            .call_tuple((int32, BigInt::from(value), loc.clone()))
+            .unwrap()
+            .try_into()
+            .unwrap();
+        imm.into()
+    };
+    let ty: Type =
+        PrimType::try_from(global("ir.PrimType").call_tuple((int32,)).unwrap()).unwrap().into();
+    let x: Var = global("ir.Var")
+        .call_tuple((FfiString::from("x"), ty.clone(), loc.clone()))
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    // One field replaced in a new node; the original is untouched and the rest is shared.
+    let bind = Bind::from_complete_fields(loc.clone(), x.clone(), int_imm(1));
+    let rebound = bind.with_value(int_imm(2));
+    assert!(!rebound.same_as(&bind));
+    assert!(rebound.var.same_as(&bind.var) && rebound.loc.same_as(&bind.loc));
+    assert!(structural_equal(&bind.value, &int_imm(1)));
+    assert!(structural_equal(
+        &rebound,
+        &Bind::from_complete_fields(loc.clone(), x.clone(), int_imm(2))
+    ));
+
+    // `with` edits several fields in one copy, like C++ `CopyOnWrite()`.
+    let exp: Expr = Op::get("prim.exp").unwrap().into();
+    let call = Call::from_complete_fields(
+        loc.clone(),
+        ty.clone(),
+        exp,
+        Array::new(vec![x.clone().into()]),
+        None,
+        Array::new(vec![]),
+    );
+    let edited = call.with(|node| {
+        node.args = Array::new(vec![int_imm(3)]);
+        node.ty_args = Array::new(vec![ty.clone()]);
+    });
+    assert!(edited.op.same_as(&call.op) && edited.ty.same_as(&call.ty));
+    assert!(structural_equal(&edited.args, &Array::<Expr>::new(vec![int_imm(3)])));
+    assert_eq!((edited.ty_args.len(), call.ty_args.len()), (1, 0));
+    assert!(call.args.get(0).unwrap().same_as(&x));
 }

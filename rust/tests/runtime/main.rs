@@ -23,9 +23,17 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use tvm_tirx::runtime::{self, MemoryScope};
 use tvm_tirx::ir::dtype;
-use tvm_tirx::tvm_ffi::{DLDevice, DLDeviceType, Module, TypeIndex};
+use tvm_tirx::runtime::{self, MemoryScope, MemoryScopeObj};
+use tvm_tirx::tvm_ffi::{DLDevice, DLDeviceType, Module, ObjectCore, TypeIndex};
+
+use common::runtime_type_info;
+
+#[test]
+fn generated_types_match_the_registry() {
+    assert_eq!(MemoryScopeObj::TYPE_KEY, "runtime.MemoryScope");
+    assert_eq!(runtime_type_info::<MemoryScopeObj>().type_depth, MemoryScopeObj::TYPE_DEPTH);
+}
 
 #[test]
 fn tensors() {

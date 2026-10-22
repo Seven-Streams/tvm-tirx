@@ -19,10 +19,17 @@
 
 //! Tests of `ir::function`.
 
+use tvm_tirx::ir::{BaseFuncObj, ExprObj};
 use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
 
 use super::{function, int32};
-use crate::common::serial;
+use crate::common::{assert_type_contracts, serial};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; BaseFuncObj: ExprObj);
+}
 
 #[test]
 fn function_attrs() {

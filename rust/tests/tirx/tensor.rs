@@ -19,12 +19,20 @@
 
 //! Tests of `tirx::tensor`: tensor types.
 
-use tvm_tirx::ir::{UNKNOWN_LOC, Location, Expr, PrimType, StringImm};
-use tvm_tirx::tirx::{tensor_is_scalar, Layout, TensorType};
-use tvm_tirx::tvm_ffi::Array;
+use tvm_tirx::ir::{Expr, PrimType, StringImm, Type, TypeObj, UNKNOWN_LOC, Location};
+use tvm_tirx::tirx::{self, tensor_is_scalar, Layout, TensorType};
+use tvm_tirx::tvm_ffi::{AnyView, Array, ObjectRefCast};
+use super::{int32, int_imm, ir, memory_scope, s, tile_8x8, var};
+use crate::common::{
+    agree, agree_kind, assert_fields, assert_type_contracts, global, native, serial,
+    structural_equal,
+};
 
-use super::{int32, memory_scope, tile_8x8, var};
-use crate::common::{agree, agree_kind, native, serial};
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; tirx::TensorTypeObj: TypeObj);
+}
 
 #[test]
 fn tensor_types() {
@@ -93,4 +101,41 @@ fn tensor_types_agree_with_cpp() {
     );
     let rust = TensorType::new([text], &float32, &scope, 0, None, UNKNOWN_LOC);
     agree_kind("TensorType(shape)", rust, native_type);
+}
+
+#[test]
+fn native_ir_objects_agree_with_getters_and_rust_allocation() {
+    let _serial = serial();
+    let ir = ir();
+
+    // tirx.TensorType
+    let shape = Array::<Expr>::new(vec![int_imm(&ir, 4).into(), int_imm(&ir, 8).into()]);
+    let tensor: tirx::TensorType = global("tirx.TensorType")
+        .call_packed(&[
+            AnyView::from(&shape),
+            AnyView::from(&ir.int32),
+            AnyView::from(&s("global")),
+            AnyView::from(&64i64),
+            AnyView::new(),
+            AnyView::from(&ir.loc),
+        ])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_fields!(tensor;
+        dtype = ir.int32, scope, shape = shape, data_alignment = 64i64,
+        layout = None::<tirx::Layout>,
+    );
+    let rust = tirx::TensorType::from_complete_fields(
+        tensor.loc.clone(),
+        tensor.dtype.clone(),
+        tensor.scope.clone(),
+        tensor.shape.clone(),
+        tensor.data_alignment,
+        tensor.layout.clone(),
+    );
+    assert!(structural_equal(&rust, &tensor));
+    let as_type: Type = tensor.clone().into();
+    assert!(as_type.clone().try_cast::<tirx::TensorType>().is_ok());
+    assert!(as_type.try_cast::<tirx::TensorMapType>().is_err());
 }

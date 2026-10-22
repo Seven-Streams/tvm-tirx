@@ -186,6 +186,12 @@ impl Bind {
 tvm_ffi::impl_object_upcast!(Bind => Stmt);
 // tvm-ffi-stubgen(end)
 
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(Bind, BindObj, new(loc, var, value), {
+    with_var: var: Var,
+    with_value: value: Expr,
+});
+
 impl Bind {
     /// Bind `var` to `value`, of the same type, for the rest of the enclosing scope
     /// (C++ `Bind(var, value, loc)`).
@@ -268,6 +274,13 @@ impl AssertStmt {
 
 tvm_ffi::impl_object_upcast!(AssertStmt => Stmt);
 // tvm-ffi-stubgen(end)
+
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(AssertStmt, AssertStmtObj, new(loc, condition, error_kind, message_parts), {
+    with_condition: condition: Expr,
+    with_error_kind: error_kind: StringImm,
+    with_message_parts: message_parts: Array<StringImm>,
+});
 
 impl AssertStmt {
     /// Assert the boolean `condition`, raising an `error_kind` error with the message
@@ -372,6 +385,17 @@ impl For {
 tvm_ffi::impl_object_upcast!(For => Stmt);
 // tvm-ffi-stubgen(end)
 
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(For, ForObj, new(loc, var, begin, end, step, kind, body, annotations), {
+    with_var: var: Var,
+    with_begin: begin: Expr,
+    with_end: end: Expr,
+    with_step: step: Expr,
+    with_kind: kind: i32,
+    with_body: body: SeqStmt,
+    with_annotations: annotations: Map<String, Any>,
+});
+
 /// The execution semantics of a [`For`] loop: `ir::ForKind`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(i32)]
@@ -385,6 +409,24 @@ pub enum ForKind {
     Vectorized = 2,
     /// The loop is unrolled.
     Unrolled = 3,
+}
+
+impl TryFrom<i32> for ForKind {
+    type Error = tvm_ffi::Error;
+
+    /// The kind a `ForObj::kind` stores.
+    fn try_from(kind: i32) -> Result<Self> {
+        Ok(match kind {
+            0 => Self::Default,
+            1 => Self::Parallel,
+            2 => Self::Vectorized,
+            3 => Self::Unrolled,
+            _ => {
+                let message = format!("{kind} is not a ForKind");
+                return Err(tvm_ffi::Error::new(tvm_ffi::VALUE_ERROR, &message, ""));
+            }
+        })
+    }
 }
 
 impl For {
@@ -746,6 +788,21 @@ impl RegionStmt {
 tvm_ffi::impl_object_upcast!(RegionStmt => Stmt);
 // tvm-ffi-stubgen(end)
 
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(
+    RegionStmt,
+    RegionStmtObj,
+    new(loc, op, args, body_params, attrs, body, result_vars),
+    {
+        with_op: op: Op,
+        with_args: args: Array<Expr>,
+        with_body_params: body_params: Array<Var>,
+        with_attrs: attrs: DictAttrs,
+        with_body: body: SeqStmt,
+        with_result_vars: result_vars: Array<Var>,
+    }
+);
+
 impl RegionStmt {
     /// The region of the region operator `op` on `args`, whose `body` binds `body_params` and
     /// defines `result_vars`, checked against the contract of the operator
@@ -1011,6 +1068,13 @@ impl If {
 tvm_ffi::impl_object_upcast!(If => Stmt);
 // tvm-ffi-stubgen(end)
 
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(If, IfObj, new(loc, condition, then_case, else_case), {
+    with_condition: condition: Expr,
+    with_then_case: then_case: SeqStmt,
+    with_else_case: else_case: Option<SeqStmt>,
+});
+
 impl If {
     /// Run `then_case` if `condition` holds, else `else_case` if given
     /// (C++ `If(condition, then_case, else_case, loc)`).
@@ -1081,6 +1145,11 @@ impl Evaluate {
 
 tvm_ffi::impl_object_upcast!(Evaluate => Stmt);
 // tvm-ffi-stubgen(end)
+
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(Evaluate, EvaluateObj, new(loc, value), {
+    with_value: value: Expr,
+});
 
 impl Evaluate {
     /// Evaluate `value` for its side effects (C++ `Evaluate(value, loc)`).

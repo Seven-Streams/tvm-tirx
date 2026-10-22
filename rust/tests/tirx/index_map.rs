@@ -20,11 +20,18 @@
 //! Tests of `tirx::index_map`.
 
 use tvm_tirx::ir::{dtype, Expr, PrimType};
-use tvm_tirx::tirx::IndexMap;
-use tvm_tirx::tvm_ffi::{Array, DLDevice, DLDeviceType};
+use tvm_tirx::tirx::{self, IndexMap};
+use tvm_tirx::tvm_ffi::object::ObjectRef;
+use tvm_tirx::tvm_ffi::{AnyView, Array, DLDevice, DLDeviceType, Object};
 
-use super::{as_i64, int32, op, range, var};
-use crate::common::{serial, structural_equal};
+use super::{as_i64, int32, ir, op, range, var};
+use crate::common::{assert_fields, assert_type_contracts, global, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; tirx::IndexMapObj: Object);
+}
 
 #[test]
 fn index_maps() {
@@ -59,4 +66,22 @@ fn index_maps() {
     let tensor = tvm_tirx::runtime::empty(&[4, 8], dtype::float(32), cpu, None).unwrap();
     let transposed = transpose.map_tensor(&tensor).unwrap();
     assert_eq!(transposed.shape(), &[8, 4]);
+}
+
+#[test]
+fn native_ir_objects_agree_with_getters_and_rust_allocation() {
+    let _serial = serial();
+    let ir = ir();
+
+    // tirx.IndexMap
+    let initial = Array::new(vec![ir.x.clone(), ir.y.clone()]);
+    let swapped = Array::<Expr>::new(vec![ir.y.clone().into(), ir.x.clone().into()]);
+    let index_map: tirx::IndexMap = global("tirx.IndexMap")
+        .call_packed(&[AnyView::from(&initial), AnyView::from(&swapped), AnyView::new()])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_fields!(index_map;
+        initial_indices = initial, final_indices = swapped, inverse_index_map = None::<ObjectRef>,
+    );
 }

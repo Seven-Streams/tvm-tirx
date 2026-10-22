@@ -21,10 +21,19 @@
 
 use tvm_tirx::ir::transform::Pass;
 use tvm_tirx::target::Target;
-use tvm_tirx::tirx::transform as tx;
+use tvm_tirx::tirx::transform::{
+    self as tx, RemoveNoOpConfig, RemoveNoOpConfigObj, UnrollLoopConfig, UnrollLoopConfigObj,
+};
+use tvm_tirx::tvm_ffi::Object;
 
-use crate::common::serial;
+use crate::common::{assert_fields, assert_type_contracts, serial};
 use crate::{module_of, void_function};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; RemoveNoOpConfigObj: Object, UnrollLoopConfigObj: Object);
+}
 
 #[test]
 fn passes() {
@@ -72,4 +81,17 @@ fn filter() {
     assert!(kept.contains("main").unwrap());
     let removed = tx::filter(|_func| Ok(false)).unwrap().run(module_of("main", &func)).unwrap();
     assert!(!removed.contains("main").unwrap());
+}
+
+#[test]
+fn rust_allocated_data_objects_are_read_by_native_getters() {
+    let _serial = serial();
+    let remove_no_op = RemoveNoOpConfig::new(5, true);
+    assert_fields!(remove_no_op; max_simplification_steps = 5i64, ignore_profiler_call = true);
+
+    let unroll = UnrollLoopConfig::new(1, 2, 3, 4, 5);
+    assert_fields!(unroll;
+        auto_max_step = 1i64, auto_max_depth = 2i64, auto_max_extent = 3i64,
+        explicit_unroll = 4i64, unroll_local_access = 5i64,
+    );
 }

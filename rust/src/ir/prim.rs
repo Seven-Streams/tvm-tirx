@@ -33,7 +33,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
-mod const_fold;
+pub(crate) mod const_fold;
 pub mod expr;
 pub mod op;
 pub mod vector_expr;

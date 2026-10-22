@@ -20,13 +20,19 @@
 //! Tests of `tirx::function`.
 
 use tvm_tirx::ir::{
-    UNKNOWN_LOC, Location, DictAttrs, MissingType, PrimType, Return, SeqStmt, Type, Var,
+    BaseFunc, BaseFuncObj, DictAttrs, MissingType, PrimType, Return, SeqStmt, Type, Var,
+    UNKNOWN_LOC, Location,
 };
-use tvm_tirx::tirx::{renew_def, Function};
+use tvm_tirx::tirx::{self, renew_def, Function};
 use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
+use super::{evaluate_body, function, ir, var, void_function};
+use crate::common::{agree, assert_fields, assert_type_contracts, native, serial, structural_equal};
 
-use super::{var, void_function};
-use crate::common::{agree, native, serial, structural_equal};
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; tirx::FunctionObj: BaseFuncObj);
+}
 
 #[test]
 fn functions() {
@@ -72,4 +78,38 @@ fn functions_agree_with_cpp() {
             native_function,
         );
     }
+}
+
+#[test]
+fn native_ir_objects_agree_with_getters_and_rust_allocation() {
+    let _serial = serial();
+    let ir = ir();
+
+    // tirx.Function: built natively around a Rust-allocated body.
+    let body = evaluate_body(&ir, 41);
+    let func = function(&ir, &body);
+    let params = Array::new(vec![ir.x.clone(), ir.y.clone()]);
+    assert_fields!(func;
+        params = params, ret_type = Type::from(ir.int32.clone()), body = Some(body.clone()),
+    );
+    let as_base: BaseFunc = func.clone().into();
+    assert_fields!(as_base; attrs);
+    let rust = tirx::Function::from_complete_fields(
+        func.loc.clone(),
+        func.ty.clone(),
+        func.attrs.clone(),
+        func.params.clone(),
+        func.ret_type.clone(),
+        func.body.clone(),
+    );
+    assert!(structural_equal(&rust, &func));
+    let other = tirx::Function::from_complete_fields(
+        func.loc.clone(),
+        func.ty.clone(),
+        func.attrs.clone(),
+        func.params.clone(),
+        func.ret_type.clone(),
+        Some(evaluate_body(&ir, 7)),
+    );
+    assert!(!structural_equal(&other, &func));
 }

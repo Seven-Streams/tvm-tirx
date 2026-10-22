@@ -23,8 +23,11 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod attrs;
+mod base;
 mod expr;
 mod function;
+mod global_info;
 mod location;
 mod module;
 mod op;

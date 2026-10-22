@@ -20,10 +20,18 @@
 //! Tests of `ir::transform::core`: pass contexts, module passes and sequential passes.
 
 use tvm_tirx::ir::transform::*;
-use tvm_tirx::tvm_ffi::{Any, Map, String as FfiString};
+use tvm_tirx::tvm_ffi::{Any, Map, Object, String as FfiString};
 
 use super::{logging_pass, no_instruments, Log};
-use crate::common::{empty_module, serial};
+use crate::common::{assert_fields, assert_type_contracts, empty_module, serial};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; PassInfoObj: Object);
+    // Opaque bindings embed only their parent; the native object is larger.
+    assert_type_contracts!(false; PassObj: Object);
+}
 
 #[test]
 fn pass_context_scope() {
@@ -89,4 +97,15 @@ fn module_and_sequential_passes() {
         Pass::from(&seq).run(empty_module()).unwrap();
     }
     assert_eq!(*log.lock().unwrap(), ["run a"], "the context disables `b`");
+}
+
+fn s(text: &str) -> FfiString {
+    FfiString::from(text)
+}
+
+#[test]
+fn rust_allocated_data_objects_are_read_by_native_getters() {
+    let _serial = serial();
+    let info = PassInfo::new(2, s("rust.pass"));
+    assert_fields!(info; opt_level = 2i64, name = s("rust.pass"));
 }

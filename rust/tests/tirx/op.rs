@@ -21,14 +21,22 @@
 //! against the native functions they follow.
 
 use tvm_tirx::ir::{
-    Call, Expr, FloatImm, FuncType, IntImm, Location, Op, PrimType, PtrType, StringImm, Type,
-    UNKNOWN_LOC,
+    AttrsObj, Call, Expr, FloatImm, FuncType, IntImm, Location, Op, PrimType, PtrType, StringImm,
+    Type, UNKNOWN_LOC,
 };
-use tvm_tirx::tirx::{fast_erf_float_expr, gpu_thread_return, logaddexp, reinterpret};
-use tvm_tirx::tvm_ffi::{AnyView, DLDataTypeExt, Function, ObjectRefCore, String as FfiString};
+use tvm_tirx::tirx::{self, fast_erf_float_expr, gpu_thread_return, logaddexp, reinterpret};
+use tvm_tirx::tvm_ffi::{
+    AnyView, Array, DLDataTypeExt, Function, Map, ObjectRefCore, String as FfiString,
+};
 
-use super::{memory_scope, var};
-use crate::common::{agree, global, serial, structural_equal};
+use super::{memory_scope, s, var};
+use crate::common::{agree, assert_fields, assert_type_contracts, global, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; tirx::CallFFIKernelAttrObj: AttrsObj);
+}
 
 fn repr<T>(value: &T) -> String
 where
@@ -152,4 +160,24 @@ fn fast_erf_follows_the_native_lowering() {
     // float constants, a non-primitive one is an error.
     assert!(fast_erf_float_expr(prim_var("int32"), 32).is_ok());
     assert!(fast_erf_float_expr(var("s", ptr("int8")), 32).is_err());
+}
+
+fn strings(items: &[&str]) -> Array<FfiString> {
+    Array::new(items.iter().map(|item| s(item)).collect())
+}
+
+#[test]
+fn rust_allocated_data_objects_are_read_by_native_getters() {
+    let _serial = serial();
+    let kernel_attrs: Map<FfiString, i64> = [(s("k"), 7i64)].into_iter().collect();
+    let attr = tirx::CallFFIKernelAttr::new(
+        strings(&["a", "b"]),
+        strings(&["c"]),
+        3,
+        kernel_attrs.clone(),
+    );
+    assert_fields!(attr;
+        launch_params = strings(&["a", "b"]), launch_fields = strings(&["c"]),
+        num_kernel_args = 3i64, kernel_attrs = kernel_attrs,
+    );
 }

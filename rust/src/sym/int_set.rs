@@ -225,3 +225,23 @@ pub fn deduce_bound(
         .call_tuple((&var.into_expr()?, &cond.into_expr()?, hint_map, relax_map))?
         .try_into()
 }
+
+impl IntSet {
+    /// `IntSet::min()`; an error unless this is an interval.
+    pub fn min(&self) -> Result<Expr> {
+        self.interval_set()?.min_value()
+    }
+
+    /// `IntSet::max()`; an error unless this is an interval.
+    pub fn max(&self) -> Result<Expr> {
+        self.interval_set()?.max_value()
+    }
+
+    /// C++ `TVM_FFI_ICHECK(as<IntervalSetObj>())`.
+    fn interval_set(&self) -> Result<IntervalSet> {
+        use tvm_ffi::ObjectRefCast as _;
+        self.clone()
+            .try_cast()
+            .map_err(|_| error!(tvm_ffi::INTERNAL_ERROR, "Check failed: (s_int) is false: "))
+    }
+}

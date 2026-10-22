@@ -27,8 +27,8 @@ use std::sync::{Mutex, MutexGuard};
 use tvm_tirx::ir::{BaseFunc, Expr, GlobalInfo, GlobalVar, IRModule, MissingTypeObj, PrimTypeObj};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::{TVMFFIGetTypeInfo, TVMFFITypeInfo};
 use tvm_tirx::tvm_ffi::{
-    Any, AnyCompatible, AnyView, Array, Function, Map, ObjectCore, ObjectRefCore, Result,
-    String as FfiString,
+    Any, AnyCompatible, AnyView, Array, FieldGetter, Function, Map, ObjectCore, ObjectRefCore,
+    Result, String as FfiString,
 };
 
 /// Run the tests of a binary one at a time: registering an operator, a memory scope or the layout
@@ -168,3 +168,50 @@ macro_rules! assert_type_contracts {
 }
 #[allow(unused_imports)]
 pub(crate) use assert_type_contracts;
+
+/// Read a reflected field through the C ABI getter, bypassing the Rust layout.
+pub fn getter<N: ObjectCore>(object: &N, field: &str) -> Any {
+    FieldGetter::new(N::type_index(), field).unwrap().get_any(object).unwrap()
+}
+
+pub fn type_key<N: ObjectCore>(_: &N) -> &'static str {
+    N::TYPE_KEY
+}
+
+pub fn same_value(lhs: AnyView, rhs: AnyView) -> bool {
+    let equal = global("ffi.StructuralEqual")
+        .call_packed(&[lhs, rhs, AnyView::from(&false), AnyView::from(&false)])
+        .unwrap();
+    bool::try_from(equal).unwrap()
+}
+
+/// Each field read directly agrees with its C ABI getter and, where given, holds the value.
+///
+/// After `optional;` the fields are the crate's `Optional<T>` cells, read out as `Option<T>`.
+#[allow(unused_macros)]
+macro_rules! assert_fields {
+    ($object:expr; $($field:ident $(= $expected:expr)?),* $(,)?) => {{
+        let object = &*$object;
+        $($crate::common::assert_fields!(@check object, $field, object.$field $(, $expected)?);)*
+    }};
+    ($object:expr; optional; $($field:ident = $expected:expr),* $(,)?) => {{
+        let object = &*$object;
+        $($crate::common::assert_fields!(@check object, $field, object.$field.get(), $expected);)*
+    }};
+    (@check $object:ident, $field:ident, $direct:expr $(, $expected:expr)?) => {{
+        use tvm_tirx::tvm_ffi::AnyView;
+        let native = $crate::common::getter($object, stringify!($field));
+        let name = format!("{}.{}", $crate::common::type_key($object), stringify!($field));
+        let direct = &$direct;
+        assert!(
+            $crate::common::same_value(AnyView::from(direct), AnyView::from(&native)),
+            "{name}: direct read differs from the getter"
+        );
+        $(assert!(
+            $crate::common::same_value(AnyView::from(&$expected), AnyView::from(&native)),
+            "{name}: unexpected value"
+        );)?
+    }};
+}
+#[allow(unused_imports)]
+pub(crate) use assert_fields;

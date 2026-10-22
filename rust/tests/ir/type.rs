@@ -20,13 +20,24 @@
 //! Tests of `ir::type`.
 
 use tvm_tirx::ir::{
-    UNKNOWN_LOC, Location, dtype, FuncType, MissingType, NoneType, PrimType, PtrType,
-    TensorRegionType, TupleType, Type,
+    dtype, AnyTypeObj, FuncType, FuncTypeObj, MissingType, MissingTypeObj, NoneType, NoneTypeObj,
+    OpaqueTypeObj, PrimType, PrimTypeObj, PtrType, PtrTypeObj, StringTypeObj, TensorRegionType,
+    TensorRegionTypeObj, TupleType, TupleTypeObj, Type, TypeObj, UNKNOWN_LOC, Location,
 };
-use tvm_tirx::tvm_ffi::{Array, DLDataType, DLDataTypeExt, ObjectRefCore};
+use tvm_tirx::tvm_ffi::{Array, DLDataType, DLDataTypeExt, Object, ObjectRefCore};
 
 use super::{scope};
-use crate::common::{agree, native, serial, structural_equal};
+use crate::common::{agree, assert_type_contracts, native, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true;
+        TypeObj: Object, AnyTypeObj: TypeObj, FuncTypeObj: TypeObj, MissingTypeObj: TypeObj,
+        OpaqueTypeObj: TypeObj, PrimTypeObj: TypeObj, PtrTypeObj: TypeObj, StringTypeObj: TypeObj,
+        TensorRegionTypeObj: TypeObj, TupleTypeObj: TypeObj, NoneTypeObj: TypeObj,
+    );
+}
 
 #[test]
 fn types() {

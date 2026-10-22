@@ -34,6 +34,8 @@
 //! - [`codegen`]: compilation of IR modules into runtime modules, and the LLVM backend queries.
 //! - [`script`]: printing IR objects as TVMScript.
 //! - [`ty`]: defining IR types, the types of expressions, in Rust with [`tirx_type`].
+//! - [`ops`]: helpers over the IR constructors for code that builds IR, expression patterns,
+//!   and the native functions Rust calls rather than writes again (printing, comparison).
 //!
 //! # Using the bindings
 //!
@@ -196,9 +198,57 @@ impl Drop for ExitOnDrop {
     }
 }
 
+/// Copy-on-write edits for a complete, `#[type_final]` node, written next to its binding.
+///
+/// `node.with(|n| { n.a = a; n.b = b; })` is C++ `auto* n = node.CopyOnWrite(); n->a = a; ...`:
+/// a copy that keeps every other field and runs no constructor logic. `node.update(...)` is the
+/// same edit, except that it returns `node` itself when every field still holds what it held,
+/// as a C++ mutator returns a node none of whose children changed. Each listed
+/// `with_<field>(value)` replaces one field. `new(...)` names the `<Node>Obj::new` arguments in
+/// order; fields of an ancestor (such as `loc`) are copied but cannot be edited.
+macro_rules! impl_with_fields {
+    ($node:ident, $obj:ident, new($($arg:ident),+ $(,)?), {$($method:ident: $field:ident: $ty:ty),+ $(,)?}) => {
+        impl $node {
+            /// A copy with the fields `edit` assigns replaced (C++ `CopyOnWrite()`).
+            #[allow(clippy::clone_on_copy)]
+            pub fn with(&self, edit: impl FnOnce(&mut $obj)) -> Self {
+                let mut obj = $obj::new($(self.$arg.clone()),+);
+                edit(&mut obj);
+                Self { base: ObjectArc::new(obj) }
+            }
+
+            /// Like [`Self::with`], but `self` itself when no field changed.
+            #[allow(clippy::clone_on_copy)]
+            pub fn update(&self, edit: impl FnOnce(&mut $obj)) -> Self {
+                let mut obj = $obj::new($(self.$arg.clone()),+);
+                edit(&mut obj);
+                if true $(&& $crate::SameField::same_field(&obj.$field, &self.$field))+ {
+                    return self.clone();
+                }
+                Self { base: ObjectArc::new(obj) }
+            }
+            $(
+                #[doc = concat!("A copy with `", stringify!($field), "` replaced.")]
+                pub fn $method(&self, $field: $ty) -> Self {
+                    self.with(|node| node.$field = $field)
+                }
+            )+
+        }
+    };
+}
+
+/// An error of `kind` with a formatted message, as a value: for `ok_or_else` and the like, where
+/// `tvm_ffi::bail!` cannot return.
+macro_rules! error {
+    ($kind:expr, $($message:tt)+) => {
+        tvm_ffi::Error::new($kind, &format!($($message)+), "")
+    };
+}
+
 pub mod backend;
 pub mod codegen;
 pub mod ir;
+pub mod ops;
 pub mod runtime;
 pub mod script;
 pub mod sym;
@@ -208,3 +258,75 @@ pub mod ty;
 
 pub use tvm_ffi;
 pub use tvm_tirx_macros::tirx_type;
+
+/// Whether a node field still holds the same value: the same object for a reference (C++
+/// `same_as`), both absent or both the same for an `Option`, equality for a plain value.
+pub trait SameField {
+    fn same_field(&self, other: &Self) -> bool;
+}
+
+impl<T: SameField> SameField for Option<T> {
+    fn same_field(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Some(lhs), Some(rhs)) => lhs.same_field(rhs),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl SameField for i32 {
+    fn same_field(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+macro_rules! impl_same_field_by_identity {
+    ($($ty:ty),+ $(,)?) => {
+        $(impl SameField for $ty {
+            fn same_field(&self, other: &Self) -> bool {
+                tvm_ffi::ObjectRefCore::same_as(self, other)
+            }
+        })+
+    };
+}
+
+// The field types of the nodes that `impl_with_fields!` covers.
+impl_same_field_by_identity!(
+    ir::Attrs,
+    ir::DictAttrs,
+    ir::Expr,
+    ir::Op,
+    ir::SeqStmt,
+    ir::StringImm,
+    ir::Type,
+    ir::Var,
+    tvm_ffi::Array<ir::Expr>,
+    tvm_ffi::Array<ir::StringImm>,
+    tvm_ffi::Array<ir::Type>,
+    tvm_ffi::Array<ir::Var>,
+    tvm_ffi::Map<tvm_ffi::String, tvm_ffi::Any>,
+);
+
+/// The operators this crate defines, which [`tvm_rust_register_ops`] registers. List every
+/// `OpHandle::define` here, so that IR using it can be built or parsed before Rust code fetches
+/// the operator.
+static OPS: &[&ir::OpHandle] = &[];
+
+/// Entry point for a host process that loads this crate as a shared library: registers every
+/// operator this crate defines, each once, so calling it again does nothing. Returns 0 on
+/// success; on failure prints the error and returns -1.
+#[no_mangle]
+pub extern "C" fn tvm_rust_register_ops() -> i32 {
+    report("tvm_rust_register_ops", ir::register_ops(OPS))
+}
+
+fn report(entry: &str, result: tvm_ffi::Result<()>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{entry}: {error}");
+            -1
+        }
+    }
+}

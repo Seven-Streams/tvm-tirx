@@ -2053,3 +2053,27 @@ impl PrimOps for Var {
         self.into()
     }
 }
+
+// Handles to the `prim` operators the passes use, as C++ has `prim::if_then_else_op()` and
+// the like.
+
+/// `pub static NAME: crate::ir::OpHandle = crate::ir::OpHandle::registered("ns.name");` for each operator.
+macro_rules! registered {
+    ($($handle:ident = $name:literal,)*) => {
+        $(
+            #[doc = concat!("`", $name, "`.")]
+            pub static $handle: crate::ir::OpHandle = crate::ir::OpHandle::registered($name);
+        )*
+    };
+}
+
+registered! {
+    CEIL = "prim.ceil",
+    CLZ = "prim.clz",
+    FMA = "prim.fma",
+    IF_THEN_ELSE = "prim.if_then_else",
+    LIKELY = "prim.likely",
+    LOG2 = "prim.log2",
+    POW = "prim.pow",
+    VSCALE = "prim.vscale",
+}

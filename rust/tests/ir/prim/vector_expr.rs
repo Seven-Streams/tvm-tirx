@@ -19,12 +19,18 @@
 
 //! Tests of `ir::prim::vector_expr`.
 
-use tvm_tirx::ir::prim;
-use tvm_tirx::ir::{UNKNOWN_LOC, Location, Call, Expr, IntImm, Op, PrimType, Type, Var};
+use tvm_tirx::ir::prim::{self, BroadcastObj, RampObj, ShuffleObj};
+use tvm_tirx::ir::{Call, Expr, ExprObj, IntImm, Op, PrimType, Type, Var, UNKNOWN_LOC, Location};
 use tvm_tirx::tvm_ffi::Array;
 
 use super::{dtype, var};
-use crate::common::{agree, native, serial};
+use crate::common::{agree, assert_type_contracts, native, serial};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; BroadcastObj: ExprObj, RampObj: ExprObj, ShuffleObj: ExprObj);
+}
 
 #[test]
 fn vector_constructors() {

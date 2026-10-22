@@ -20,13 +20,29 @@
 //! Tests of `ir::expr`.
 
 use tvm_tirx::ir::*;
+use tvm_tirx::runtime::MemoryScope;
 use tvm_tirx::tvm_ffi::{
-    Any, AnyView, Array, BigInt, DLDataType, Function, ObjectRefCast, ObjectRefCore, Result,
-    String as FfiString,
+    Any, AnyView, Array, BigInt, DLDataType, DLDataTypeExt, Function, Object, ObjectRefCast,
+    ObjectRefCore, Result, String as FfiString,
 };
 
 use super::{int32, int32_var, op, parse_dtype, tensor_var};
-use crate::common::{agree, agree_fresh, agree_kind, native, serial, structural_equal};
+use crate::common::{
+    agree, agree_fresh, agree_kind, assert_type_contracts, global, native, serial, structural_equal,
+};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true;
+        ExprObj: Object, CallObj: ExprObj, ConstantObj: ExprObj, DataTypeImmObj: ConstantObj,
+        FloatImmObj: ConstantObj, GenericConstObj: ConstantObj, GlobalVarObj: ExprObj,
+        IntImmObj: ConstantObj, OpaqueExprObj: ExprObj, RangeObj: Object,
+        StagingExprObj: ExprObj, LambdaExprObj: StagingExprObj, StringImmObj: ConstantObj,
+        TensorLoadObj: ExprObj, TensorRegionObj: ExprObj, TupleObj: ExprObj,
+        TupleGetItemObj: ExprObj, VarObj: ExprObj,
+    );
+}
 
 #[test]
 fn expressions() {
@@ -420,4 +436,76 @@ fn calls_agree_with_cpp() {
             (rust, native) => panic!("{what}: {rust:?} vs. {native:?}"),
         }
     }
+}
+
+#[test]
+fn native_objects_are_read_through_generated_fields() {
+    let _serial = serial();
+    let int32 = DLDataType::try_from_str("int32").unwrap();
+    let loc: Location = global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap();
+
+    let value: IntImm = global("ir.IntImm")
+        .call_tuple((int32, BigInt::from(42i64), loc.clone()))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(value.value.to_i64(), Some(42));
+    // `ty` lives on `ir.Expr`, two `Deref`s up from `IntImmObj`.
+    let ty: PrimType = value.ty.clone().try_cast().unwrap();
+    assert_eq!(ty.dtype, int32);
+
+    // `PtrType.scope` is the one field whose type lives outside `ir`.
+    let pointer: PtrType = global("ir.PtrType")
+        .call_tuple((ty.clone(), tvm_tirx::tvm_ffi::String::from("global")))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let _scope: &MemoryScope = &pointer.scope;
+    assert!(structural_equal(&pointer.element_type, &ty));
+}
+
+#[test]
+fn rust_allocated_nodes_equal_native_ones() {
+    let _serial = serial();
+    let int32 = DLDataType::try_from_str("int32").unwrap();
+    let loc: Location = global("ir.UnknownLoc").call_packed(&[]).unwrap().try_into().unwrap();
+    let int_imm = |value: i64| -> IntImm {
+        global("ir.IntImm")
+            .call_tuple((int32, BigInt::from(value), loc.clone()))
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
+    let native = int_imm(42);
+
+    let rust = IntImm::new(loc.clone(), native.ty.clone(), BigInt::from(42i64));
+    assert!(structural_equal(&rust, &native));
+    assert!(!structural_equal(&rust, &int_imm(7)));
+
+    // Upcasts along the ancestor chain, and back down with a checked cast.
+    let expr: Expr = rust.clone().into();
+    let back: IntImm = expr.clone().try_cast().unwrap();
+    assert_eq!(back.value.to_i64(), Some(42));
+    assert!(expr.clone().try_cast::<Var>().is_err());
+
+    let native_range: Range = global("ir.RangeFromMinExtent")
+        .call_tuple((int_imm(0), native.clone(), loc.clone()))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let rust_range = Range::from_complete_fields(int_imm(0).into(), expr.clone(), loc.clone());
+    assert!(structural_equal(&rust_range, &native_range));
+
+    let native_stmt: Evaluate = global("ir.Evaluate")
+        .call_tuple((native.clone(), loc.clone()))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let rust_stmt = Evaluate::from_complete_fields(loc.clone(), expr);
+    assert!(structural_equal(&rust_stmt, &native_stmt));
+
+    // A Rust-allocated node is printed by the C++ repr machinery.
+    let repr: Any = global("ffi.ReprPrint").call_packed(&[AnyView::from(&rust_stmt)]).unwrap();
+    let repr = tvm_tirx::tvm_ffi::String::try_from(repr).unwrap();
+    assert!(repr.as_str().contains("42"), "unexpected repr: {repr}");
 }

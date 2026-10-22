@@ -19,9 +19,21 @@
 
 //! Tests of `ir::location`.
 
-use tvm_tirx::ir::SourceName;
+use tvm_tirx::ir::{
+    CallSiteLocObj, LocationObj, SourceLocObj, SourceName, SourceNameObj, UnknownLocObj,
+};
+use tvm_tirx::tvm_ffi::Object;
 
-use crate::common::{serial, structural_equal};
+use crate::common::{assert_type_contracts, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true;
+        LocationObj: Object, CallSiteLocObj: LocationObj, SourceLocObj: LocationObj,
+        SourceNameObj: Object, UnknownLocObj: LocationObj,
+    );
+}
 
 #[test]
 fn source_names() {

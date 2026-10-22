@@ -1386,6 +1386,14 @@ impl Call {
 tvm_ffi::impl_object_upcast!(Call => Expr);
 // tvm-ffi-stubgen(end)
 
+// Copy-on-write edits (`with` / `with_<field>`) for the passes that rebuild the node.
+impl_with_fields!(Call, CallObj, new(loc, ty, op, args, attrs, ty_args), {
+    with_op: op: Expr,
+    with_args: args: Array<Expr>,
+    with_attrs: attrs: Option<Attrs>,
+    with_ty_args: ty_args: Array<Type>,
+});
+
 impl Call {
     /// The call of `op` on `args`, of type `ty` or the type [`Call::reinfer_type`] gives it when
     /// `None` (C++ `Call(ty, op, args, attrs, ty_args, loc)`). The call is not validated.

@@ -679,3 +679,16 @@ pub fn allow_uint_as_index() -> Result<AllowUintAsIndexScope> {
         .try_into()?;
     Ok(AllowUintAsIndexScope(ExitOnDrop::new(exit)))
 }
+
+impl Analyzer {
+    /// `CanProveGreaterEqual(expr, lower_bound)`, which has no global: an `IntImm` is compared
+    /// directly, anything else by the constant bound of its rewrite-simplified form.
+    pub fn can_prove_greater_equal(&self, expr: &Expr, lower_bound: i64) -> Result<bool> {
+        use tvm_ffi::ObjectRefCast as _;
+        if let Ok(imm) = expr.clone().try_cast::<crate::ir::IntImm>() {
+            return Ok(imm.value >= tvm_ffi::BigInt::from(lower_bound));
+        }
+        let bound = self.const_int_bound(self.rewrite_simplify(expr)?)?;
+        Ok(bound.min_value >= lower_bound)
+    }
+}

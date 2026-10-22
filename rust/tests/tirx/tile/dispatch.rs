@@ -21,12 +21,19 @@
 
 use tvm_tirx::ir::{Location, UNKNOWN_LOC, Expr, PrimType, Stmt, Var};
 use tvm_tirx::target::Target;
-use tvm_tirx::tirx::tile::DispatchContext;
+use tvm_tirx::tirx::tile::{DispatchContext, DispatchContextObj};
 use tvm_tirx::tirx::{TensorType, ThreadScope};
-use tvm_tirx::tvm_ffi::{Any, Map, ObjectRefCast, String as FfiString};
+use tvm_tirx::tvm_ffi::{Any, Map, Object, ObjectRefCast, String as FfiString};
 
-use crate::common::{global, serial, structural_equal};
+use crate::common::{assert_type_contracts, global, serial, structural_equal};
 use crate::{int32, memory_scope, var};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    // Opaque bindings embed only their parent; the native object is larger.
+    assert_type_contracts!(false; DispatchContextObj: Object);
+}
 
 #[test]
 fn dispatch_contexts() {

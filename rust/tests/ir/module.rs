@@ -19,11 +19,18 @@
 
 //! Tests of `ir::module`.
 
-use tvm_tirx::ir::{UNKNOWN_LOC, BaseFunc, DictAttrs, Expr, GlobalInfo, GlobalVar, IRModule};
-use tvm_tirx::tvm_ffi::{Any, Array, Map, String as FfiString};
-
+use tvm_tirx::ir::{
+    BaseFunc, DictAttrs, Expr, GlobalInfo, GlobalVar, IRModule, IRModuleObj, UNKNOWN_LOC,
+};
+use tvm_tirx::tvm_ffi::{Any, Array, Map, Object, String as FfiString};
 use super::{function, int32};
-use crate::common::{agree, native, serial, structural_equal};
+use crate::common::{agree, assert_type_contracts, native, serial, structural_equal};
+
+#[test]
+fn generated_types_match_the_registry() {
+    let _serial = serial();
+    assert_type_contracts!(true; IRModuleObj: Object);
+}
 
 #[test]
 fn modules() {
