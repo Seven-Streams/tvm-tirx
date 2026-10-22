@@ -509,11 +509,11 @@ impl TupleGetItem {
     /// Field `index` of `tuple_value`, typed by the field type and checked against the tuple type
     /// when it is known (C++ `TupleGetItem(tuple, index, loc)`).
     pub fn from_tuple(
-        tuple_value: impl Into<Expr>,
+        tuple_value: impl IntoExpr,
         index: i32,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let tuple_value = tuple_value.into();
+        let tuple_value = tuple_value.into_expr()?;
         if index < 0 {
             let message = format!(
                 "Index out of bounds: Tuple {} cannot be accessed with negative index {index}",
@@ -618,14 +618,15 @@ impl TensorLoad {
     /// The element of `source` at `indices`, typed by the element type of `source`: the type the
     /// type of `source` infers (C++ `TensorLoad(source, indices, loc)`).
     pub fn new(
-        source: impl Into<Expr>,
-        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        source: impl IntoExpr,
+        indices: impl IntoIterator<Item = impl IntoExpr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
         static INFER_TYPE: support::TypeAttr =
             support::TypeAttr::new("__tvm_tensor_load_infer_type__");
-        let (source, loc) = (source.into(), loc.into());
-        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (source, loc) = (source.into_expr()?, loc.into());
+        let indices =
+            indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         for index in indices.iter() {
             support::prim_dtype(&index)?;
         }
@@ -808,35 +809,6 @@ impl From<f64> for Expr {
     }
 }
 
-/// The largest finite value of each float8 type code, and whether the type is unsigned
-/// (`support::kMax*` in `src/support/limits.h`).
-fn float8_bound(code: u8) -> Option<(f64, bool)> {
-    use tvm_ffi::DLDataTypeCode::*;
-    let bound = match code {
-        c if c == kDLFloat8_e3m4 as u8 => (31.0, false),
-        c if c == kDLFloat8_e4m3 as u8 => (448.0, false),
-        c if c == kDLFloat8_e4m3b11fnuz as u8 => (30.0, true),
-        c if c == kDLFloat8_e4m3fn as u8 => (448.0, false),
-        c if c == kDLFloat8_e4m3fnuz as u8 => (448.0, true),
-        c if c == kDLFloat8_e5m2 as u8 => (57344.0, false),
-        c if c == kDLFloat8_e5m2fnuz as u8 => (57344.0, true),
-        // `support::kMaxE8M0FNU`, 2^128.
-        c if c == kDLFloat8_e8m0fnu as u8 => (3.402_823_669_209_385e38, true),
-        _ => return None,
-    };
-    Some(bound)
-}
-
-/// The largest finite value of each float6 type code.
-fn float6_bound(code: u8) -> Option<f64> {
-    use tvm_ffi::DLDataTypeCode::*;
-    match code {
-        c if c == kDLFloat6_e2m3fn as u8 => Some(7.5),
-        c if c == kDLFloat6_e3m2fn as u8 => Some(28.0),
-        _ => None,
-    }
-}
-
 /// The checks of C++ `FloatImm(ty, value)`: a scalar floating-point type whose range holds a
 /// finite `value`.
 fn check_float_imm(dtype: DLDataType, value: f64) -> Result<()> {
@@ -850,8 +822,8 @@ fn check_float_imm(dtype: DLDataType, value: f64) -> Result<()> {
         return Err(check_failed(VALUE_ERROR, condition, "FloatImm can only take scalar."));
     }
     let (code, bits) = (dtype.code, dtype.bits);
-    let float8 = float8_bound(code);
-    let float6 = float6_bound(code);
+    let float8 = support::float8_bound(code);
+    let float6 = support::float6_bound(code);
     let supported = code == support::FLOAT
         || float8.is_some()
         || float6.is_some()
@@ -888,14 +860,13 @@ fn check_float_imm(dtype: DLDataType, value: f64) -> Result<()> {
         )
     } else if code == support::FLOAT && bits == 16 {
         (
-            ("value >= -support::kMaxFloat16", -65504.0, "exceeds minimum of"),
-            ("value <= support::kMaxFloat16", 65504.0),
+            ("value >= -support::kMaxFloat16", -support::MAX_FLOAT16, "exceeds minimum of"),
+            ("value <= support::kMaxFloat16", support::MAX_FLOAT16),
         )
     } else if code == support::BFLOAT && bits == 16 {
-        const MAX_BFLOAT16: f64 = 3.895313892515354759047080037148786688e38;
         (
-            ("value >= -support::kMaxBFloat16", -MAX_BFLOAT16, "exceeds minimum of"),
-            ("value <= support::kMaxBFloat16", MAX_BFLOAT16),
+            ("value >= -support::kMaxBFloat16", -support::MAX_BFLOAT16, "exceeds minimum of"),
+            ("value <= support::kMaxBFloat16", support::MAX_BFLOAT16),
         )
     } else if let Some((bound, nonneg)) = float8 {
         let low = match nonneg {
@@ -1033,6 +1004,21 @@ impl From<i64> for IntImm {
 impl From<bool> for IntImm {
     fn from(value: bool) -> Self {
         Self::bool(value)
+    }
+}
+
+/// What converts to an expression, possibly failing: anything that converts into an [`Expr`] (a
+/// node, a `Var`, a Rust `i32`, `f32` and the like), and an [`Ex`](crate::ir::prim::Ex), an
+/// expression under construction, which gives the first error any of its steps raised. The
+/// constructors and functions that can fail take their expression operands as `impl IntoExpr`, so
+/// an `Ex` passes straight in and `?` on their result covers it.
+pub trait IntoExpr {
+    fn into_expr(self) -> Result<Expr>;
+}
+
+impl<T: Into<Expr>> IntoExpr for T {
+    fn into_expr(self) -> Result<Expr> {
+        Ok(self.into())
     }
 }
 
@@ -1427,14 +1413,14 @@ impl Call {
     /// `None` (C++ `Call(ty, op, args, attrs, ty_args, loc)`). The call is not validated.
     pub fn new(
         ty: Option<&Type>,
-        op: impl Into<Expr>,
-        args: impl IntoIterator<Item = impl Into<Expr>>,
+        op: impl IntoExpr,
+        args: impl IntoIterator<Item = impl IntoExpr>,
         attrs: Option<&Attrs>,
         ty_args: impl IntoIterator<Item = impl Into<Type>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (op, attrs, loc) = (op.into(), attrs.cloned(), loc.into());
-        let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (op, attrs, loc) = (op.into_expr()?, attrs.cloned(), loc.into());
+        let args = args.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         let ty_args = ty_args.into_iter().map(Into::into).collect::<Array<Type>>();
         if let Some(ty) = ty {
             return Ok(Self::from_fields(loc, ty.clone(), op, args, attrs, ty_args));
@@ -1689,8 +1675,9 @@ impl LambdaExpr {
     }
 
     /// The body with `arguments` substituted for the variables (`ir.LambdaExprApply`).
-    pub fn apply(&self, arguments: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Expr> {
-        let arguments = arguments.into_iter().map(Into::into).collect::<Array<Expr>>();
+    pub fn apply(&self, arguments: impl IntoIterator<Item = impl IntoExpr>) -> Result<Expr> {
+        let arguments =
+            arguments.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("ir.LambdaExprApply")
             .call_tuple((self, &arguments))?
             .try_into()
@@ -1751,23 +1738,19 @@ impl Range {
 impl Range {
     /// The range `[begin, end)` (C++ `Range(begin, end, loc)`);
     /// [`from_min_extent`](Self::from_min_extent) takes the extent instead of the end.
-    pub fn new(
-        begin: impl Into<Expr>,
-        end: impl Into<Expr>,
-        loc: impl Into<Location>,
-    ) -> Result<Self> {
-        let (begin, end) = (begin.into(), end.into());
+    pub fn new(begin: impl IntoExpr, end: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let (begin, end) = (begin.into_expr()?, end.into_expr()?);
         let extent = Self::get_extent_from_begin_end(begin.clone(), end)?;
         Ok(Self::from_fields(begin, extent, loc.into()))
     }
 
     /// The range of `extent` values from `min_value` (C++ `Range::FromMinExtent`).
     pub fn from_min_extent(
-        min_value: impl Into<Expr>,
-        extent: impl Into<Expr>,
+        min_value: impl IntoExpr,
+        extent: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (min_value, extent) = (min_value.into(), extent.into());
+        let (min_value, extent) = (min_value.into_expr()?, extent.into_expr()?);
         support::prim_dtype(&min_value)?;
         support::prim_dtype(&extent)?;
         Ok(Self::from_fields(min_value, extent, loc.into()))
@@ -1776,8 +1759,8 @@ impl Range {
     /// The extent `end - begin` of the range `[begin, end)`: the other operand when `end` adds
     /// `begin` to it, `end` when `begin` is zero, else `end - begin` folded
     /// (C++ `Range::GetExtentFromBeginEnd`).
-    pub fn get_extent_from_begin_end(begin: impl Into<Expr>, end: impl Into<Expr>) -> Result<Expr> {
-        let (begin, end) = (begin.into(), end.into());
+    pub fn get_extent_from_begin_end(begin: impl IntoExpr, end: impl IntoExpr) -> Result<Expr> {
+        let (begin, end) = (begin.into_expr()?, end.into_expr()?);
         support::prim_dtype(&begin)?;
         support::prim_dtype(&end)?;
         if let Some(add) = end.as_node::<AddObj>() {
@@ -1792,7 +1775,7 @@ impl Range {
             begin.as_node::<IntImmObj>().is_some_and(|imm| imm.value == BigInt::from(0i64));
         match is_zero {
             true => Ok(end),
-            false => crate::ir::prim::op::sub(end, begin, UnknownLoc::new()),
+            false => crate::ir::prim::op::sub(end, begin),
         }
     }
 }

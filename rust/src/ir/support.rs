@@ -44,6 +44,40 @@ pub(crate) const FLOAT: u8 = DLDataTypeCode::kDLFloat as u8;
 pub(crate) const BFLOAT: u8 = DLDataTypeCode::kDLBfloat as u8;
 pub(crate) const BOOL: u8 = DLDataTypeCode::kDLBool as u8;
 
+/// C++ `support::kMaxFloat16`, the largest finite float16.
+pub(crate) const MAX_FLOAT16: f64 = 65504.0;
+/// C++ `support::kMaxBFloat16` (`0x1.fep127`), the largest finite bfloat16.
+pub(crate) const MAX_BFLOAT16: f64 = 3.389_531_389_251_535_5e38;
+
+/// The largest finite value of each float8 type code, and whether the type is unsigned
+/// (`support::kMax*` in `src/support/limits.h`).
+pub(crate) fn float8_bound(code: u8) -> Option<(f64, bool)> {
+    use tvm_ffi::DLDataTypeCode::*;
+    let bound = match code {
+        c if c == kDLFloat8_e3m4 as u8 => (31.0, false),
+        c if c == kDLFloat8_e4m3 as u8 => (448.0, false),
+        c if c == kDLFloat8_e4m3b11fnuz as u8 => (30.0, true),
+        c if c == kDLFloat8_e4m3fn as u8 => (448.0, false),
+        c if c == kDLFloat8_e4m3fnuz as u8 => (448.0, true),
+        c if c == kDLFloat8_e5m2 as u8 => (57344.0, false),
+        c if c == kDLFloat8_e5m2fnuz as u8 => (57344.0, true),
+        // `support::kMaxE8M0FNU`, 2^128.
+        c if c == kDLFloat8_e8m0fnu as u8 => (3.402_823_669_209_385e38, true),
+        _ => return None,
+    };
+    Some(bound)
+}
+
+/// The largest finite value of each float6 type code.
+pub(crate) fn float6_bound(code: u8) -> Option<f64> {
+    use tvm_ffi::DLDataTypeCode::*;
+    match code {
+        c if c == kDLFloat6_e2m3fn as u8 => Some(7.5),
+        c if c == kDLFloat6_e3m2fn as u8 => Some(28.0),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Errors
 

@@ -616,7 +616,7 @@ PrimExpr operator==(PrimExpr a, PrimExpr b) { return equal(a, b); }
 PrimExpr equal(PrimExpr a, PrimExpr b, Location loc) {
   BinaryOpMatchTypes(a, b, loc);
   if (auto ret = prim::TryConstFold<prim::EQ>(a, b)) return ret.value();
-  if (IsVScaleCall(a) && IsVScaleCall(b)) return true;
+  if (IsVScaleCall(a) && IsVScaleCall(b)) return IntImm::Bool(true);
   return prim::EQ(a, b, loc);
 }
 

@@ -31,9 +31,11 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Any
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): tvm_ffi::Tensor
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use crate::sym::analyzer::Analyzer;
@@ -112,10 +114,11 @@ impl IndexMap {
     /// The final indices `indices` map to (`tirx.IndexMapMapIndices`).
     pub fn map_indices(
         &self,
-        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        indices: impl IntoIterator<Item = impl IntoExpr>,
         analyzer: Option<&Analyzer>,
     ) -> Result<Array<Expr>> {
-        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let indices =
+            indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.IndexMapMapIndices")
             .call_tuple((self, &indices, analyzer.cloned()))?
             .try_into()
@@ -124,10 +127,10 @@ impl IndexMap {
     /// The shape a buffer of `shape` has after the mapping (`tirx.IndexMapMapShape`).
     pub fn map_shape(
         &self,
-        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        shape: impl IntoIterator<Item = impl IntoExpr>,
         analyzer: Option<&Analyzer>,
     ) -> Result<Array<Expr>> {
-        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let shape = shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.IndexMapMapShape")
             .call_tuple((self, &shape, analyzer.cloned()))?
             .try_into()

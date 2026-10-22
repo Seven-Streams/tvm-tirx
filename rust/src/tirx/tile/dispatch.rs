@@ -30,9 +30,11 @@
 // tvm-ffi-stubgen(import-object): crate::ir::stmt::Stmt
 // tvm-ffi-stubgen(import-object): tvm_ffi::AnyView
 // tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCast
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use crate::ir::stmt::Stmt;
@@ -167,11 +169,12 @@ impl DispatchContext {
     pub fn add_alloc_tensor(
         &self,
         tensor: impl Into<Var>,
-        allocated_addr: impl IntoIterator<Item = impl Into<Expr>>,
+        allocated_addr: impl IntoIterator<Item = impl IntoExpr>,
         annotations: &Map<String, Any>,
     ) -> Result<()> {
         let tensor = tensor.into();
-        let allocated_addr = allocated_addr.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let allocated_addr =
+            allocated_addr.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.DispatchContextAddAllocTensor").call_tuple((
             self,
             &tensor,

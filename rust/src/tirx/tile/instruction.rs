@@ -35,12 +35,14 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::TensorRegion
 // tvm-ffi-stubgen(import-object): crate::ir::op::Op
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
 use crate::ir::attrs::AttrsObj;
 use crate::ir::expr::Call;
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::TensorRegion;
 use crate::ir::op::Op;
 use crate::tirx::thread_scope::ThreadScope;
@@ -200,8 +202,10 @@ tvm_ffi::impl_object_upcast!(TrnAttrs => Attrs);
 
 /// The tensor region `value` covers: a `TensorLoad` converted, a `TensorRegion` as is
 /// (`tirx.AsTensorRegion`).
-pub fn as_tensor_region(value: impl Into<Expr>) -> Result<TensorRegion> {
-    tvm_ffi::cached_global_func!("tirx.AsTensorRegion").call_tuple((&value.into(),))?.try_into()
+pub fn as_tensor_region(value: impl IntoExpr) -> Result<TensorRegion> {
+    tvm_ffi::cached_global_func!("tirx.AsTensorRegion")
+        .call_tuple((&value.into_expr()?,))?
+        .try_into()
 }
 
 /// Validate the calls of the tile instruction `op` with `validator`, after the checks of its

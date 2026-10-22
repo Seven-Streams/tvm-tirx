@@ -36,9 +36,11 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::ObjectCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
@@ -158,14 +160,14 @@ impl TensorType {
     /// (the runtime's allocation alignment when 0 or less), with `layout` if given
     /// (C++ `TensorType(shape, dtype, scope, data_alignment, layout, loc)`).
     pub fn new(
-        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        shape: impl IntoIterator<Item = impl IntoExpr>,
         dtype: impl Into<PrimType>,
         scope: impl Into<MemoryScope>,
         data_alignment: i32,
         layout: Option<&Layout>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let shape = shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         for extent in shape.iter() {
             support::prim_dtype(&extent)?;
         }

@@ -34,10 +34,12 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use crate::ir::support;
@@ -287,12 +289,17 @@ impl IterSplitExpr {
     /// The split `(source // lower_factor) % extent * scale` (`sym.IterSplitExpr`).
     pub fn new(
         source: impl Into<IterMark>,
-        lower_factor: impl Into<Expr>,
-        extent: impl Into<Expr>,
-        scale: impl Into<Expr>,
+        lower_factor: impl IntoExpr,
+        extent: impl IntoExpr,
+        scale: impl IntoExpr,
     ) -> Result<Self> {
         tvm_ffi::cached_global_func!("sym.IterSplitExpr")
-            .call_tuple((&source.into(), &lower_factor.into(), &extent.into(), &scale.into()))?
+            .call_tuple((
+                &source.into(),
+                &lower_factor.into_expr()?,
+                &extent.into_expr()?,
+                &scale.into_expr()?,
+            ))?
             .try_into()
     }
 }
@@ -330,15 +337,15 @@ pub enum IterMapLevel {
 ///
 /// With `simplify_trivial_iterators`, the iterators of extent 1 become constants.
 pub fn detect_iter_map(
-    indices: impl IntoIterator<Item = impl Into<Expr>>,
+    indices: impl IntoIterator<Item = impl IntoExpr>,
     input_iters: &Map<Var, Range>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     check_level: IterMapLevel,
     analyzer: Option<&Analyzer>,
     simplify_trivial_iterators: bool,
 ) -> Result<IterMapResult> {
-    let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
-    let (predicate, analyzer) = (predicate.into(), analyzer.cloned());
+    let indices = indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
+    let (predicate, analyzer) = (predicate.into_expr()?, analyzer.cloned());
     tvm_ffi::cached_global_func!("sym.DetectIterMap")
         .call_packed(&[
             AnyView::from(&indices),
@@ -354,27 +361,27 @@ pub fn detect_iter_map(
 /// `index` as a sum of splits of the iterators `input_iters`, with what is not detected in its
 /// `base` (`sym.NormalizeToIterSum`).
 pub fn normalize_to_iter_sum(
-    index: impl Into<Expr>,
+    index: impl IntoExpr,
     input_iters: &Map<Var, Range>,
     analyzer: Option<&Analyzer>,
 ) -> Result<IterSumExpr> {
     tvm_ffi::cached_global_func!("sym.NormalizeToIterSum")
-        .call_tuple((&index.into(), input_iters, analyzer.cloned()))?
+        .call_tuple((&index.into_expr()?, input_iters, analyzer.cloned()))?
         .try_into()
 }
 
 /// Simplify `indices` through iterator map detection; they are returned unchanged when they are
 /// not iterator maps (`sym.IterMapSimplify`).
 pub fn iter_map_simplify(
-    indices: impl IntoIterator<Item = impl Into<Expr>>,
+    indices: impl IntoIterator<Item = impl IntoExpr>,
     input_iters: &Map<Var, Range>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     check_level: IterMapLevel,
     analyzer: Option<&Analyzer>,
     simplify_trivial_iterators: bool,
 ) -> Result<Array<Expr>> {
-    let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
-    let (predicate, analyzer) = (predicate.into(), analyzer.cloned());
+    let indices = indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
+    let (predicate, analyzer) = (predicate.into_expr()?, analyzer.cloned());
     tvm_ffi::cached_global_func!("sym.IterMapSimplify")
         .call_packed(&[
             AnyView::from(&indices),
@@ -388,9 +395,9 @@ pub fn iter_map_simplify(
 }
 
 /// The plain expression of the iterator map `expr` (`sym.NormalizeIterMapToExpr`).
-pub fn normalize_iter_map_to_expr(expr: impl Into<Expr>) -> Result<Expr> {
+pub fn normalize_iter_map_to_expr(expr: impl IntoExpr) -> Result<Expr> {
     tvm_ffi::cached_global_func!("sym.NormalizeIterMapToExpr")
-        .call_tuple((&expr.into(),))?
+        .call_tuple((&expr.into_expr()?,))?
         .try_into()
 }
 
@@ -399,17 +406,18 @@ pub fn normalize_iter_map_to_expr(expr: impl Into<Expr>) -> Result<Expr> {
 /// the outer and inner predicates, or empty when the bindings cannot be divided
 /// (`sym.SubspaceDivide`).
 pub fn subspace_divide(
-    bindings: impl IntoIterator<Item = impl Into<Expr>>,
+    bindings: impl IntoIterator<Item = impl IntoExpr>,
     input_iters: &Map<Var, Range>,
     sub_iters: impl IntoIterator<Item = impl Into<Var>>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     check_level: IterMapLevel,
     analyzer: Option<&Analyzer>,
     simplify_trivial_iterators: bool,
 ) -> Result<Array<Array<IterMark>>> {
-    let bindings = bindings.into_iter().map(Into::into).collect::<Array<Expr>>();
+    let bindings =
+        bindings.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
     let sub_iters = sub_iters.into_iter().map(Into::into).collect::<Array<Var>>();
-    let (predicate, analyzer) = (predicate.into(), analyzer.cloned());
+    let (predicate, analyzer) = (predicate.into_expr()?, analyzer.cloned());
     tvm_ffi::cached_global_func!("sym.SubspaceDivide")
         .call_packed(&[
             AnyView::from(&bindings),
@@ -427,10 +435,10 @@ pub fn subspace_divide(
 /// (`sym.InverseAffineIterMap`).
 pub fn inverse_affine_iter_map(
     iter_map: impl IntoIterator<Item = impl Into<IterSumExpr>>,
-    outputs: impl IntoIterator<Item = impl Into<Expr>>,
+    outputs: impl IntoIterator<Item = impl IntoExpr>,
 ) -> Result<Map<Var, Expr>> {
     let iter_map = iter_map.into_iter().map(Into::into).collect::<Array<IterSumExpr>>();
-    let outputs = outputs.into_iter().map(Into::into).collect::<Array<Expr>>();
+    let outputs = outputs.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
     tvm_ffi::cached_global_func!("sym.InverseAffineIterMap")
         .call_tuple((&iter_map, &outputs))?
         .try_into()

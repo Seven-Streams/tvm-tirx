@@ -64,10 +64,12 @@
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimTypeObj
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
@@ -1709,10 +1711,10 @@ impl Cast {
     /// (C++ `Cast(ty, value, loc)`).
     pub fn new(
         ty: impl Into<PrimType>,
-        value: impl Into<Expr>,
+        value: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (ty, value) = (ty.into(), value.into());
+        let (ty, value) = (ty.into(), value.into_expr()?);
         let value_dtype = support::prim_dtype(&value)?;
         if ty.dtype.lanes != value_dtype.lanes {
             let condition = "ty->dtype.lanes == value_expr_ty->dtype.lanes";
@@ -1781,11 +1783,11 @@ macro_rules! binary_new {
             impl $node {
                 #[doc = $doc]
                 pub fn new(
-                    a: impl Into<Expr>,
-                    b: impl Into<Expr>,
+                    a: impl IntoExpr,
+                    b: impl IntoExpr,
                     loc: impl Into<Location>,
                 ) -> Result<Self> {
-                    let (a, b) = (a.into(), b.into());
+                    let (a, b) = (a.into_expr()?, b.into_expr()?);
                     let ty = binary_type(stringify!($node), $operands, &a, &b)?;
                     Ok(Self::from_fields(loc.into(), ty, a, b))
                 }
@@ -1855,8 +1857,8 @@ fn logical_type(a: &Expr, b: &Expr) -> Result<Type> {
 
 impl And {
     /// The node the boolean `a && b` over boolean operands (C++ `And(a, b, loc)`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        let (a, b) = (a.into(), b.into());
+    pub fn new(a: impl IntoExpr, b: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let (a, b) = (a.into_expr()?, b.into_expr()?);
         let ty = logical_type(&a, &b)?;
         Ok(Self::from_fields(loc.into(), ty, a, b))
     }
@@ -1864,8 +1866,8 @@ impl And {
 
 impl Or {
     /// The node the boolean `a || b` over boolean operands (C++ `Or(a, b, loc)`).
-    pub fn new(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        let (a, b) = (a.into(), b.into());
+    pub fn new(a: impl IntoExpr, b: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let (a, b) = (a.into_expr()?, b.into_expr()?);
         let ty = logical_type(&a, &b)?;
         Ok(Self::from_fields(loc.into(), ty, a, b))
     }
@@ -1873,8 +1875,8 @@ impl Or {
 
 impl BitwiseNot {
     /// The node `~a` over an integer or boolean operand (C++ `BitwiseNot(a, loc)`).
-    pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        let a = a.into();
+    pub fn new(a: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let a = a.into_expr()?;
         if !matches!(support::prim_dtype(&a)?.code, support::INT | support::UINT | support::BOOL) {
             let condition = "a_ty.MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt) || \
                              a_ty.MatchesCode(DLDataTypeCode::kDLBool)";
@@ -1887,8 +1889,8 @@ impl BitwiseNot {
 
 impl Not {
     /// The node the boolean `!a` over a boolean operand (C++ `Not(a, loc)`).
-    pub fn new(a: impl Into<Expr>, loc: impl Into<Location>) -> Result<Self> {
-        let a = a.into();
+    pub fn new(a: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let a = a.into_expr()?;
         let a_dtype = support::prim_dtype(&a)?;
         if a_dtype.code != support::BOOL {
             let condition = "a_ty.MatchesCode(DLDataTypeCode::kDLBool)";
@@ -1902,13 +1904,13 @@ impl Select {
     /// The node choosing `true_value` where `condition` holds and `false_value` elsewhere, which
     /// evaluates both (C++ `Select(condition, true_value, false_value, loc)`).
     pub fn new(
-        condition: impl Into<Expr>,
-        true_value: impl Into<Expr>,
-        false_value: impl Into<Expr>,
+        condition: impl IntoExpr,
+        true_value: impl IntoExpr,
+        false_value: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
         let (condition, true_value, false_value) =
-            (condition.into(), true_value.into(), false_value.into());
+            (condition.into_expr()?, true_value.into_expr()?, false_value.into_expr()?);
         let condition_dtype = support::prim_dtype(&condition)?;
         let true_dtype = support::prim_dtype(&true_value)?;
         let false_dtype = support::prim_dtype(&false_value)?;
@@ -1952,11 +1954,11 @@ impl Let {
     /// (C++ `Let(var, value, body, loc)`).
     pub fn new(
         var: impl Into<Var>,
-        value: impl Into<Expr>,
-        body: impl Into<Expr>,
+        value: impl IntoExpr,
+        body: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (var, value, body) = (var.into(), value.into(), body.into());
+        let (var, value, body) = (var.into(), value.into_expr()?, body.into_expr()?);
         let value_dtype = support::prim_dtype(&value)?;
         support::prim_dtype(&body)?;
         let Some(var_ty) = var.ty.as_node::<PrimTypeObj>() else {

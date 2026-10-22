@@ -32,9 +32,11 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::analyzer::Analyzer
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use crate::ir::support;
@@ -127,14 +129,16 @@ impl IntSet {
     }
 
     /// The set of the lanes of the vector `vec` (`sym.IntSetVector`).
-    pub fn vector(vec: impl Into<Expr>) -> Result<Self> {
-        tvm_ffi::cached_global_func!("sym.IntSetVector").call_tuple((&vec.into(),))?.try_into()
+    pub fn vector(vec: impl IntoExpr) -> Result<Self> {
+        tvm_ffi::cached_global_func!("sym.IntSetVector")
+            .call_tuple((&vec.into_expr()?,))?
+            .try_into()
     }
 
     /// The set that holds only `point` (`sym.IntSetSinglePoint`).
-    pub fn single_point(point: impl Into<Expr>) -> Result<Self> {
+    pub fn single_point(point: impl IntoExpr) -> Result<Self> {
         tvm_ffi::cached_global_func!("sym.IntSetSinglePoint")
-            .call_tuple((&point.into(),))?
+            .call_tuple((&point.into_expr()?,))?
             .try_into()
     }
 }
@@ -155,12 +159,12 @@ impl IntervalSet {
 pub fn estimate_region_lower_bound(
     region: impl IntoIterator<Item = impl Into<Range>>,
     var_dom: &Map<Var, Range>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     analyzer: Option<&Analyzer>,
 ) -> Result<Option<Array<IntSet>>> {
     let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionLowerBound")
-        .call_tuple((&region, var_dom, &predicate.into(), analyzer.cloned()))?
+        .call_tuple((&region, var_dom, &predicate.into_expr()?, analyzer.cloned()))?
         .try_into()
 }
 
@@ -169,12 +173,12 @@ pub fn estimate_region_lower_bound(
 pub fn estimate_region_strict_bound(
     region: impl IntoIterator<Item = impl Into<Range>>,
     var_dom: &Map<Var, Range>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     analyzer: Option<&Analyzer>,
 ) -> Result<Option<Array<IntSet>>> {
     let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionStrictBound")
-        .call_tuple((&region, var_dom, &predicate.into(), analyzer.cloned()))?
+        .call_tuple((&region, var_dom, &predicate.into_expr()?, analyzer.cloned()))?
         .try_into()
 }
 
@@ -183,12 +187,12 @@ pub fn estimate_region_strict_bound(
 pub fn estimate_region_upper_bound(
     region: impl IntoIterator<Item = impl Into<Range>>,
     var_dom: &Map<Var, Range>,
-    predicate: impl Into<Expr>,
+    predicate: impl IntoExpr,
     analyzer: Option<&Analyzer>,
 ) -> Result<Array<IntSet>> {
     let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionUpperBound")
-        .call_tuple((&region, var_dom, &predicate.into(), analyzer.cloned()))?
+        .call_tuple((&region, var_dom, &predicate.into_expr()?, analyzer.cloned()))?
         .try_into()
 }
 
@@ -212,12 +216,12 @@ pub fn union_lower_bound(sets: impl IntoIterator<Item = impl Into<IntSet>>) -> R
 /// The values of `var` for which `cond` holds, with the variables of `hint_map` over their sets
 /// and those of `relax_map` relaxed to theirs (`sym.DeduceBound`).
 pub fn deduce_bound(
-    var: impl Into<Expr>,
-    cond: impl Into<Expr>,
+    var: impl IntoExpr,
+    cond: impl IntoExpr,
     hint_map: &Map<Var, IntSet>,
     relax_map: &Map<Var, IntSet>,
 ) -> Result<IntSet> {
     tvm_ffi::cached_global_func!("sym.DeduceBound")
-        .call_tuple((&var.into(), &cond.into(), hint_map, relax_map))?
+        .call_tuple((&var.into_expr()?, &cond.into_expr()?, hint_map, relax_map))?
         .try_into()
 }

@@ -31,7 +31,9 @@
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
+mod const_fold;
 pub mod expr;
 pub mod op;
 pub mod vector_expr;
@@ -42,13 +44,14 @@ pub use vector_expr::*;
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use tvm_ffi::Result;
 // tvm-ffi-stubgen(end)
 
 /// Whether `lhs` and `rhs` are the same expression tree, without remapping variables: use
 /// structural equality for that (`prim.expr_deep_equal`).
-pub fn expr_deep_equal(lhs: impl Into<Expr>, rhs: impl Into<Expr>) -> Result<bool> {
+pub fn expr_deep_equal(lhs: impl IntoExpr, rhs: impl IntoExpr) -> Result<bool> {
     tvm_ffi::cached_global_func!("prim.expr_deep_equal")
-        .call_tuple((&lhs.into(), &rhs.into()))?
+        .call_tuple((&lhs.into_expr()?, &rhs.into_expr()?))?
         .try_into()
 }

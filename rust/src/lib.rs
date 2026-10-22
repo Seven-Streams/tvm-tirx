@@ -91,6 +91,14 @@
 //! The unknown location is [`ir::UNKNOWN_LOC`] as a constructor argument and
 //! [`ir::Location::unknown`] as a value.
 //!
+//! The operators are written in Rust too, after `src/ir/prim/op.cc`: [`ir::prim::op::add`] and
+//! its siblings match their operand types and fold constants as C++ `add` does, and the math
+//! functions ([`ir::prim::op::floor`], [`ir::prim::op::exp`], ...) build the same calls. They
+//! take expressions or literals typed as C++ types them and build at the unknown location (the
+//! `_at` variants take one), and an [`ir::prim::op::Ex`] gives them operator syntax:
+//! `floordiv(&x + 1, 4)?` is the C++ `floordiv(x + 1, 4)`. An `Ex` passes into any function or
+//! constructor that takes an [`ir::IntoExpr`], as any expression does.
+//!
 //! # Defining a type in Rust
 //!
 //! [`tvm_ffi::rs_class`] defines a new IR type, a type of expressions as [`ir::PrimType`] and

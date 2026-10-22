@@ -40,11 +40,13 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::sym::int_set::IntSet
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ExitOnDrop;
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use crate::ir::support;
@@ -485,10 +487,10 @@ impl Analyzer {
     pub fn bind(
         &self,
         var: impl Into<Var>,
-        expr: impl Into<Expr>,
+        expr: impl IntoExpr,
         allow_override: bool,
     ) -> Result<()> {
-        let (var, expr) = (var.into(), expr.into());
+        let (var, expr) = (var.into(), expr.into_expr()?);
         tvm_ffi::cached_global_func!("sym.AnalyzerBind").call_tuple((
             self,
             &var,
@@ -528,18 +530,18 @@ impl Analyzer {
 
     /// Assume `constraint` until the returned scope is dropped
     /// (`sym.AnalyzerEnterConstraintContext`).
-    pub fn constraint_scope(&self, constraint: impl Into<Expr>) -> Result<ConstraintScope> {
+    pub fn constraint_scope(&self, constraint: impl IntoExpr) -> Result<ConstraintScope> {
         let exit: tvm_ffi::Function =
             tvm_ffi::cached_global_func!("sym.AnalyzerEnterConstraintContext")
-                .call_tuple((self, &constraint.into()))?
+                .call_tuple((self, &constraint.into_expr()?))?
                 .try_into()?;
         Ok(ConstraintScope(ExitOnDrop::new(exit)))
     }
 
     /// The constant bounds of `expr` (`sym.AnalyzerConstIntBound`).
-    pub fn const_int_bound(&self, expr: impl Into<Expr>) -> Result<ConstIntBound> {
+    pub fn const_int_bound(&self, expr: impl IntoExpr) -> Result<ConstIntBound> {
         tvm_ffi::cached_global_func!("sym.AnalyzerConstIntBound")
-            .call_tuple((self, &expr.into()))?
+            .call_tuple((self, &expr.into_expr()?))?
             .try_into()
     }
 
@@ -551,9 +553,9 @@ impl Analyzer {
     }
 
     /// The modular set `coeff * x + base` of `expr` (`sym.AnalyzerModularSet`).
-    pub fn modular_set(&self, expr: impl Into<Expr>) -> Result<ModularSet> {
+    pub fn modular_set(&self, expr: impl IntoExpr) -> Result<ModularSet> {
         tvm_ffi::cached_global_func!("sym.AnalyzerModularSet")
-            .call_tuple((self, &expr.into()))?
+            .call_tuple((self, &expr.into_expr()?))?
             .try_into()
     }
 
@@ -561,33 +563,33 @@ impl Analyzer {
     /// (`sym.AnalyzerIntSet`).
     pub fn int_set(
         &self,
-        expr: impl Into<Expr>,
+        expr: impl IntoExpr,
         dom_map: Option<&Map<Var, IntSet>>,
     ) -> Result<IntSet> {
         tvm_ffi::cached_global_func!("sym.AnalyzerIntSet")
-            .call_tuple((self, &expr.into(), dom_map.cloned()))?
+            .call_tuple((self, &expr.into_expr()?, dom_map.cloned()))?
             .try_into()
     }
 
     /// Simplify `expr`, alternating the rewrite and canonical simplifiers `steps` times
     /// (`sym.AnalyzerSimplify`).
-    pub fn simplify(&self, expr: impl Into<Expr>, steps: i32) -> Result<Expr> {
+    pub fn simplify(&self, expr: impl IntoExpr, steps: i32) -> Result<Expr> {
         tvm_ffi::cached_global_func!("sym.AnalyzerSimplify")
-            .call_tuple((self, &expr.into(), steps))?
+            .call_tuple((self, &expr.into_expr()?, steps))?
             .try_into()
     }
 
     /// Simplify `expr` by rewrite rules (`sym.AnalyzerRewriteSimplify`).
-    pub fn rewrite_simplify(&self, expr: impl Into<Expr>) -> Result<Expr> {
+    pub fn rewrite_simplify(&self, expr: impl IntoExpr) -> Result<Expr> {
         tvm_ffi::cached_global_func!("sym.AnalyzerRewriteSimplify")
-            .call_tuple((self, &expr.into()))?
+            .call_tuple((self, &expr.into_expr()?))?
             .try_into()
     }
 
     /// Simplify `expr` into canonical form (`sym.AnalyzerCanonicalSimplify`).
-    pub fn canonical_simplify(&self, expr: impl Into<Expr>) -> Result<Expr> {
+    pub fn canonical_simplify(&self, expr: impl IntoExpr) -> Result<Expr> {
         tvm_ffi::cached_global_func!("sym.AnalyzerCanonicalSimplify")
-            .call_tuple((self, &expr.into()))?
+            .call_tuple((self, &expr.into_expr()?))?
             .try_into()
     }
 
@@ -614,23 +616,23 @@ impl Analyzer {
     }
 
     /// Whether `expr` is provably true (`sym.AnalyzerCanProve`).
-    pub fn can_prove(&self, expr: impl Into<Expr>, strength: ProofStrength) -> Result<bool> {
+    pub fn can_prove(&self, expr: impl IntoExpr, strength: ProofStrength) -> Result<bool> {
         tvm_ffi::cached_global_func!("sym.AnalyzerCanProve")
-            .call_tuple((self, &expr.into(), strength as i32))?
+            .call_tuple((self, &expr.into_expr()?, strength as i32))?
             .try_into()
     }
 
     /// Whether `lhs == rhs` is provably true (`sym.AnalyzerCanProveEqual`).
-    pub fn can_prove_equal(&self, lhs: impl Into<Expr>, rhs: impl Into<Expr>) -> Result<bool> {
+    pub fn can_prove_equal(&self, lhs: impl IntoExpr, rhs: impl IntoExpr) -> Result<bool> {
         tvm_ffi::cached_global_func!("sym.AnalyzerCanProveEqual")
-            .call_tuple((self, &lhs.into(), &rhs.into()))?
+            .call_tuple((self, &lhs.into_expr()?, &rhs.into_expr()?))?
             .try_into()
     }
 
     /// The relation of `lhs` to `rhs` the known comparisons imply (`sym.AnalyzerTryCompare`).
-    pub fn try_compare(&self, lhs: impl Into<Expr>, rhs: impl Into<Expr>) -> Result<CompareResult> {
+    pub fn try_compare(&self, lhs: impl IntoExpr, rhs: impl IntoExpr) -> Result<CompareResult> {
         let result: i64 = tvm_ffi::cached_global_func!("sym.AnalyzerTryCompare")
-            .call_tuple((self, &lhs.into(), &rhs.into()))?
+            .call_tuple((self, &lhs.into_expr()?, &rhs.into_expr()?))?
             .try_into()?;
         result.try_into()
     }

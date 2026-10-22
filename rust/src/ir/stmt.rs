@@ -53,6 +53,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::Type
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
@@ -60,6 +61,7 @@ use crate::ir::expr::Call;
 use crate::ir::expr::Expr;
 use crate::ir::expr::IntImm;
 use crate::ir::expr::IntImmObj;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::StringImm;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
@@ -200,10 +202,10 @@ impl Bind {
     /// (C++ `Bind(var, value, loc)`).
     pub fn new(
         var: impl Into<Var>,
-        value: impl Into<Expr>,
+        value: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (var, value) = (var.into(), value.into());
+        let (var, value) = (var.into(), value.into_expr()?);
         if !support::structural_equal(&value.ty, &var.ty)? {
             let condition = "ffi::StructuralEqual()(value->ty, var->ty)";
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
@@ -287,12 +289,12 @@ impl AssertStmt {
     /// Assert the boolean `condition`, raising an `error_kind` error with the message
     /// `message_parts` when it fails (C++ `AssertStmt(condition, error_kind, message_parts, loc)`).
     pub fn new(
-        condition: impl Into<Expr>,
+        condition: impl IntoExpr,
         error_kind: impl Into<StringImm>,
         message_parts: impl IntoIterator<Item = impl Into<StringImm>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (condition, error_kind) = (condition.into(), error_kind.into());
+        let (condition, error_kind) = (condition.into_expr()?, error_kind.into());
         let message_parts = message_parts.into_iter().map(Into::into).collect::<Array<StringImm>>();
         let condition_ty = support::prim_type(&condition)?;
         if condition_ty.dtype.code != support::BOOL {
@@ -417,15 +419,16 @@ impl For {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         var: impl Into<Var>,
-        begin: impl Into<Expr>,
-        end: impl Into<Expr>,
-        step: impl Into<Expr>,
+        begin: impl IntoExpr,
+        end: impl IntoExpr,
+        step: impl IntoExpr,
         kind: ForKind,
         body: impl Into<Stmt>,
         annotations: Option<&Map<String, Any>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (var, begin, end, step) = (var.into(), begin.into(), end.into(), step.into());
+        let (var, begin, end, step) =
+            (var.into(), begin.into_expr()?, end.into_expr()?, step.into_expr()?);
         let var_expr: Expr = var.clone().into();
         let var_ty = support::prim_type(&var_expr)?;
         for expr in [&begin, &end, &step] {
@@ -575,11 +578,11 @@ impl While {
     /// The loop running `body` while the scalar `condition` holds, checked to be well formed
     /// (C++ `While(condition, body, loc)`).
     pub fn checked(
-        condition: impl Into<Expr>,
+        condition: impl IntoExpr,
         body: impl Into<Stmt>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let condition = condition.into();
+        let condition = condition.into_expr()?;
         let condition_dtype = support::prim_dtype(&condition)?;
         let body = into_body(body.into())?;
         if !support::is_scalar(condition_dtype) {
@@ -655,15 +658,16 @@ impl TensorStore {
     /// Store `value` into the element of `dest` at `indices`, checked by the validation the type of
     /// `dest` registers (C++ `TensorStore(dest, indices, value, loc)`).
     pub fn new(
-        dest: impl Into<Expr>,
-        indices: impl IntoIterator<Item = impl Into<Expr>>,
-        value: impl Into<Expr>,
+        dest: impl IntoExpr,
+        indices: impl IntoIterator<Item = impl IntoExpr>,
+        value: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
         static VALIDATE: support::TypeAttr =
             support::TypeAttr::new("__tvm_tensor_store_validate__");
-        let (dest, value) = (dest.into(), value.into());
-        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (dest, value) = (dest.into_expr()?, value.into_expr()?);
+        let indices =
+            indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         for index in indices.iter() {
             support::prim_dtype(&index)?;
         }
@@ -776,7 +780,7 @@ impl RegionStmt {
     /// (C++ `RegionStmt(op, args, body_params, attrs, body, result_vars, loc)`).
     pub fn new(
         op: impl Into<Op>,
-        args: impl IntoIterator<Item = impl Into<Expr>>,
+        args: impl IntoIterator<Item = impl IntoExpr>,
         body_params: impl IntoIterator<Item = impl Into<Var>>,
         attrs: impl Into<DictAttrs>,
         body: impl Into<Stmt>,
@@ -784,7 +788,7 @@ impl RegionStmt {
         loc: impl Into<Location>,
     ) -> Result<Self> {
         let (op, attrs, body) = (op.into(), attrs.into(), into_body(body.into())?);
-        let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let args = args.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         let body_params = body_params.into_iter().map(Into::into).collect::<Array<Var>>();
         let result_vars = result_vars.into_iter().map(Into::into).collect::<Array<Var>>();
         let name = op.name.as_str().to_string();
@@ -1038,12 +1042,12 @@ impl If {
     /// Run `then_case` if `condition` holds, else `else_case` if given
     /// (C++ `If(condition, then_case, else_case, loc)`).
     pub fn new(
-        condition: impl Into<Expr>,
+        condition: impl IntoExpr,
         then_case: impl Into<Stmt>,
         else_case: Option<&Stmt>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let condition = condition.into();
+        let condition = condition.into_expr()?;
         support::prim_dtype(&condition)?;
         let then_case = into_body(then_case.into())?;
         let else_case = else_case.map(|stmt| into_body(stmt.clone())).transpose()?;

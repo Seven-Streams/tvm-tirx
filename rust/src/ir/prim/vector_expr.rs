@@ -32,24 +32,22 @@
 // tvm-ffi-stubgen(custom-new): prim.Shuffle
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
-// tvm-ffi-stubgen(import-object): tvm_ffi::BigInt
 // tvm-ffi-stubgen(import-object): tvm_ffi::DLDataType
 // tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Call
 // tvm-ffi-stubgen(import-object): crate::ir::expr::CallObj
-// tvm-ffi-stubgen(import-object): crate::ir::expr::FloatImmObj
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntImm
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntImmObj
-// tvm-ffi-stubgen(import-object): crate::ir::expr::FloatImm
 // tvm-ffi-stubgen(import-object): crate::ir::location::UnknownLoc
-// tvm-ffi-stubgen(import-object): crate::ir::prim::expr::Cast
 // tvm-ffi-stubgen(import-object): crate::ir::prim::expr::Mul
 // tvm-ffi-stubgen(import-object): crate::ir::prim::expr::MulObj
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::Type
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::cast
 // tvm-ffi-stubgen(import-object): crate::ir::dtype::with_lanes
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::dtype::with_lanes;
@@ -57,21 +55,19 @@ use crate::ir::expr::Call;
 use crate::ir::expr::CallObj;
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
-use crate::ir::expr::FloatImm;
-use crate::ir::expr::FloatImmObj;
 use crate::ir::expr::IntImm;
 use crate::ir::expr::IntImmObj;
+use crate::ir::expr::IntoExpr;
 use crate::ir::location::Location;
 use crate::ir::location::UnknownLoc;
-use crate::ir::prim::expr::Cast;
 use crate::ir::prim::expr::Mul;
 use crate::ir::prim::expr::MulObj;
+use crate::ir::prim::op::cast;
 use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Array;
-use tvm_ffi::BigInt;
 use tvm_ffi::DLDataType;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectRefCore;
@@ -264,12 +260,12 @@ impl Ramp {
     /// The vector of `lanes` values from `base` by `stride`, with `stride` cast to the type of
     /// `base` (C++ `Ramp(base, stride, lanes, loc)`).
     pub fn new(
-        base: impl Into<Expr>,
-        stride: impl Into<Expr>,
-        lanes: impl Into<Expr>,
+        base: impl IntoExpr,
+        stride: impl IntoExpr,
+        lanes: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (base, stride, lanes) = (base.into(), stride.into(), lanes.into());
+        let (base, stride, lanes) = (base.into_expr()?, stride.into_expr()?, lanes.into_expr()?);
         let base_dtype = support::prim_dtype(&base)?;
         let stride_dtype = support::prim_dtype(&stride)?;
         support::prim_dtype(&lanes)?;
@@ -281,7 +277,7 @@ impl Ramp {
         }
         let stride = match stride_dtype == base_dtype {
             true => stride,
-            false => cast_scalar(stride, base_dtype)?,
+            false => cast(stride, PrimType::from_dtype(base_dtype)?)?,
         };
         let (dtype, lanes) = vector_lanes(base_dtype, lanes)?;
         let ty = PrimType::from_dtype(dtype)?;
@@ -292,11 +288,11 @@ impl Ramp {
 impl Broadcast {
     /// The vector of `lanes` copies of the scalar `value` (C++ `Broadcast(value, lanes, loc)`).
     pub fn new(
-        value: impl Into<Expr>,
-        lanes: impl Into<Expr>,
+        value: impl IntoExpr,
+        lanes: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (value, lanes) = (value.into(), lanes.into());
+        let (value, lanes) = (value.into_expr()?, lanes.into_expr()?);
         let value_dtype = support::prim_dtype(&value)?;
         support::prim_dtype(&lanes)?;
         if !support::is_scalar(value_dtype) {
@@ -312,12 +308,14 @@ impl Shuffle {
     /// The vector of the lanes at `indices` of the concatenated `vectors`
     /// (C++ `Shuffle(vectors, indices, loc)`).
     pub fn new(
-        vectors: impl IntoIterator<Item = impl Into<Expr>>,
-        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        vectors: impl IntoIterator<Item = impl IntoExpr>,
+        indices: impl IntoIterator<Item = impl IntoExpr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let vectors = vectors.into_iter().map(Into::into).collect::<Array<Expr>>();
-        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let vectors =
+            vectors.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
+        let indices =
+            indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         let dtypes = vectors
             .iter()
             .map(|vector| support::prim_dtype(&vector))
@@ -414,84 +412,4 @@ fn vscale_factor(lanes: &Expr) -> Result<Option<i32>> {
         }
     }
     Ok(None)
-}
-
-/// C++ `prim::cast(value, dtype)` to the scalar type `dtype`, which differs from the type of
-/// `value`: a constant is converted (`MakeConst`), anything else becomes a `Cast` node.
-fn cast_scalar(value: Expr, dtype: DLDataType) -> Result<Expr> {
-    if let Some(imm) = value.as_node::<IntImmObj>() {
-        return make_const_scalar(dtype, ConstValue::Int(imm.value.clone()), &imm.loc);
-    }
-    if let Some(imm) = value.as_node::<FloatImmObj>() {
-        return make_const_scalar(dtype, ConstValue::Float(imm.value), &imm.loc);
-    }
-    Ok(Cast::new(PrimType::from_dtype(dtype)?, value, UnknownLoc::new())?.into())
-}
-
-/// The value of a constant [`make_const_scalar`] converts.
-pub(crate) enum ConstValue {
-    Int(BigInt),
-    Float(f64),
-}
-
-/// C++ `prim::MakeConstScalar(dtype, value, loc)`: an `IntImm` for an integer or boolean type, a
-/// `FloatImm` for a floating-point type. [`make_const`](crate::ir::prim::op::make_const)
-/// broadcasts it over the lanes of a vector type.
-pub(crate) fn make_const_scalar(
-    dtype: DLDataType,
-    value: ConstValue,
-    loc: &Location,
-) -> Result<Expr> {
-    use tvm_ffi::DLDataTypeCode::*;
-    let code = dtype.code;
-    let float_codes = [
-        kDLFloat,
-        kDLFloat8_e3m4,
-        kDLFloat8_e4m3,
-        kDLFloat8_e4m3b11fnuz,
-        kDLFloat8_e4m3fn,
-        kDLFloat8_e4m3fnuz,
-        kDLFloat8_e5m2,
-        kDLFloat8_e5m2fnuz,
-        kDLFloat8_e8m0fnu,
-        kDLFloat6_e2m3fn,
-        kDLFloat6_e3m2fn,
-        kDLFloat4_e2m1fn,
-    ];
-    if matches!(code, support::INT | support::UINT | support::BOOL) {
-        let value = match value {
-            ConstValue::Int(value) => value,
-            ConstValue::Float(value) => {
-                if code == support::UINT && value < 0.0 {
-                    let message = format!(
-                        "cannot make uint from negative value {}",
-                        support::CppDouble(value)
-                    );
-                    return Err(support::check_failed(
-                        tvm_ffi::INTERNAL_ERROR,
-                        "value >= 0",
-                        &message,
-                    ));
-                }
-                BigInt::try_from(value)?
-            }
-        };
-        if code == support::UINT && value.is_negative() {
-            let message = format!("cannot make uint from negative value {value}");
-            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, "value >= 0", &message));
-        }
-        return Ok(IntImm::from_dtype(dtype, value, loc.clone())?.into());
-    }
-    if float_codes.iter().any(|float| code == *float as u8)
-        || (code == support::BFLOAT && dtype.bits == 16)
-    {
-        let value = match value {
-            ConstValue::Int(value) => value.to_f64()?,
-            ConstValue::Float(value) => value,
-        };
-        return Ok(FloatImm::from_dtype(dtype, value, loc.clone())?.into());
-    }
-    let ty = PrimType::from_dtype(dtype)?;
-    let message = format!("cannot make const for type {}", support::repr(&ty));
-    Err(tvm_ffi::Error::new(tvm_ffi::INTERNAL_ERROR, &message, ""))
 }
