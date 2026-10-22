@@ -473,11 +473,11 @@ impl TupleGetItem {
     /// Field `index` of `tuple_value`, typed by the field type and checked against the tuple type
     /// when it is known (C++ `TupleGetItem(tuple, index, loc)`).
     pub fn from_tuple(
-        tuple_value: impl Into<Expr>,
+        tuple_value: impl IntoExpr,
         index: i32,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let tuple_value = tuple_value.into();
+        let tuple_value = tuple_value.into_expr()?;
         if index < 0 {
             let message = format!(
                 "Index out of bounds: Tuple {} cannot be accessed with negative index {index}",
@@ -582,14 +582,15 @@ impl TensorLoad {
     /// The element of `source` at `indices`, typed by the element type of `source`: the type the
     /// type of `source` infers (C++ `TensorLoad(source, indices, loc)`).
     pub fn new(
-        source: impl Into<Expr>,
-        indices: impl IntoIterator<Item = impl Into<Expr>>,
+        source: impl IntoExpr,
+        indices: impl IntoIterator<Item = impl IntoExpr>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
         static INFER_TYPE: support::TypeAttr =
             support::TypeAttr::new("__tvm_tensor_load_infer_type__");
-        let (source, loc) = (source.into(), loc.into());
-        let indices = indices.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (source, loc) = (source.into_expr()?, loc.into());
+        let indices =
+            indices.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         for index in indices.iter() {
             support::prim_dtype(&index)?;
         }
@@ -999,6 +1000,21 @@ impl From<bool> for IntImm {
     }
 }
 
+/// What converts to an expression, possibly failing: anything that converts into an [`Expr`] (a
+/// node, a `Var`, a Rust `i32`, `f32` and the like), and an [`Ex`](crate::ir::prim::Ex), an
+/// expression under construction, which gives the first error any of its steps raised. The
+/// constructors and functions that can fail take their expression operands as `impl IntoExpr`, so
+/// an `Ex` passes straight in and `?` on their result covers it.
+pub trait IntoExpr {
+    fn into_expr(self) -> Result<Expr>;
+}
+
+impl<T: Into<Expr>> IntoExpr for T {
+    fn into_expr(self) -> Result<Expr> {
+        Ok(self.into())
+    }
+}
+
 impl From<i32> for Expr {
     fn from(value: i32) -> Self {
         IntImm::int32(value).into()
@@ -1375,14 +1391,14 @@ impl Call {
     /// `None` (C++ `Call(ty, op, args, attrs, ty_args, loc)`). The call is not validated.
     pub fn new(
         ty: Option<&Type>,
-        op: impl Into<Expr>,
-        args: impl IntoIterator<Item = impl Into<Expr>>,
+        op: impl IntoExpr,
+        args: impl IntoIterator<Item = impl IntoExpr>,
         attrs: Option<&Attrs>,
         ty_args: impl IntoIterator<Item = impl Into<Type>>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (op, attrs, loc) = (op.into(), attrs.cloned(), loc.into());
-        let args = args.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let (op, attrs, loc) = (op.into_expr()?, attrs.cloned(), loc.into());
+        let args = args.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         let ty_args = ty_args.into_iter().map(Into::into).collect::<Array<Type>>();
         if let Some(ty) = ty {
             return Ok(Self::from_complete_fields(loc, ty.clone(), op, args, attrs, ty_args));
@@ -1618,8 +1634,9 @@ impl LambdaExpr {
     }
 
     /// The body with `arguments` substituted for the variables (`ir.LambdaExprApply`).
-    pub fn apply(&self, arguments: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Expr> {
-        let arguments = arguments.into_iter().map(Into::into).collect::<Array<Expr>>();
+    pub fn apply(&self, arguments: impl IntoIterator<Item = impl IntoExpr>) -> Result<Expr> {
+        let arguments =
+            arguments.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("ir.LambdaExprApply")
             .call_tuple((self, &arguments))?
             .try_into()
@@ -1676,23 +1693,19 @@ impl Range {
 impl Range {
     /// The range `[begin, end)` (C++ `Range(begin, end, loc)`);
     /// [`from_min_extent`](Self::from_min_extent) takes the extent instead of the end.
-    pub fn new(
-        begin: impl Into<Expr>,
-        end: impl Into<Expr>,
-        loc: impl Into<Location>,
-    ) -> Result<Self> {
-        let (begin, end) = (begin.into(), end.into());
+    pub fn new(begin: impl IntoExpr, end: impl IntoExpr, loc: impl Into<Location>) -> Result<Self> {
+        let (begin, end) = (begin.into_expr()?, end.into_expr()?);
         let extent = Self::get_extent_from_begin_end(begin.clone(), end)?;
         Ok(Self::from_complete_fields(begin, extent, loc.into()))
     }
 
     /// The range of `extent` values from `min_value` (C++ `Range::FromMinExtent`).
     pub fn from_min_extent(
-        min_value: impl Into<Expr>,
-        extent: impl Into<Expr>,
+        min_value: impl IntoExpr,
+        extent: impl IntoExpr,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let (min_value, extent) = (min_value.into(), extent.into());
+        let (min_value, extent) = (min_value.into_expr()?, extent.into_expr()?);
         support::prim_dtype(&min_value)?;
         support::prim_dtype(&extent)?;
         Ok(Self::from_complete_fields(min_value, extent, loc.into()))
@@ -1701,8 +1714,8 @@ impl Range {
     /// The extent `end - begin` of the range `[begin, end)`: the other operand when `end` adds
     /// `begin` to it, `end` when `begin` is zero, else `end - begin` folded
     /// (C++ `Range::GetExtentFromBeginEnd`).
-    pub fn get_extent_from_begin_end(begin: impl Into<Expr>, end: impl Into<Expr>) -> Result<Expr> {
-        let (begin, end) = (begin.into(), end.into());
+    pub fn get_extent_from_begin_end(begin: impl IntoExpr, end: impl IntoExpr) -> Result<Expr> {
+        let (begin, end) = (begin.into_expr()?, end.into_expr()?);
         support::prim_dtype(&begin)?;
         support::prim_dtype(&end)?;
         if let Some(add) = end.as_node::<AddObj>() {
@@ -1717,7 +1730,7 @@ impl Range {
             begin.as_node::<IntImmObj>().is_some_and(|imm| imm.value == BigInt::from(0i64));
         match is_zero {
             true => Ok(end),
-            false => crate::ir::prim::op::sub(end, begin, UnknownLoc::new()),
+            false => crate::ir::prim::op::sub(end, begin),
         }
     }
 }

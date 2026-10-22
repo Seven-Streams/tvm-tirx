@@ -36,14 +36,19 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::ObjectCore
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::sig
+// tvm-ffi-stubgen(import-object): tvm_ffi::tvm_ffi_sys::TVMFFIAny
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::expr::Var;
 use crate::ir::location::Location;
 use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::r#type::TypeObj;
+use crate::ir::sig;
 use crate::ir::support;
 use crate::runtime::MemoryScope;
 use crate::sym::analyzer::Analyzer;
@@ -54,6 +59,7 @@ use tvm_ffi::Array;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectCore;
 use tvm_ffi::Result;
+use tvm_ffi::tvm_ffi_sys::TVMFFIAny;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/tirx.TensorType
@@ -151,14 +157,14 @@ impl TensorType {
     /// (the runtime's allocation alignment when 0 or less), with `layout` if given
     /// (C++ `TensorType(shape, dtype, scope, data_alignment, layout, loc)`).
     pub fn new(
-        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        shape: impl IntoIterator<Item = impl IntoExpr>,
         dtype: impl Into<PrimType>,
         scope: impl Into<MemoryScope>,
         data_alignment: i32,
         layout: Option<&Layout>,
         loc: impl Into<Location>,
     ) -> Result<Self> {
-        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let shape = shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         for extent in shape.iter() {
             support::prim_dtype(&extent)?;
         }
@@ -192,4 +198,18 @@ pub fn tensor_is_scalar(tensor: impl Into<Var>, alloc_or_decl: bool) -> Result<b
     tvm_ffi::cached_global_func!("tirx.TensorIsScalar")
         .call_tuple((&tensor.into(), alloc_or_decl))?
         .try_into()
+}
+
+/// C++ `tirx::TensorVar` as a signature descriptor ([`sig::ArgType`]): a `Var`, not a subclass,
+/// whose type is a [`TensorType`].
+pub struct TensorVar;
+
+impl sig::ArgType for TensorVar {
+    fn check(value: &TVMFFIAny) -> bool {
+        sig::var_of_type::<TensorTypeObj>(value)
+    }
+
+    fn type_str() -> std::string::String {
+        crate::ir::expr::VarObj::TYPE_KEY.into()
+    }
 }

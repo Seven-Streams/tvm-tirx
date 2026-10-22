@@ -50,8 +50,8 @@ fn int_value(expr: Expr) -> i64 {
 fn expr_deep_equal() {
     let _serial = serial();
     let x = var("x", PrimType::int(32));
-    let a = prim::op::add(&x, 1, UNKNOWN_LOC).unwrap();
-    let b = prim::op::add(&x, 1, UNKNOWN_LOC).unwrap();
+    let a = prim::op::add(&x, 1).unwrap();
+    let b = prim::op::add(&x, 1).unwrap();
     assert!(prim::expr_deep_equal(&a, &b).unwrap());
     assert!(!prim::expr_deep_equal(&a, var("x", PrimType::int(32))).unwrap());
 }

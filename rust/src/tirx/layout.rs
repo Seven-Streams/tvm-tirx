@@ -33,9 +33,11 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Any
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
+use crate::ir::expr::IntoExpr;
 use crate::ir::support;
 use crate::sym::analyzer::Analyzer;
 use crate::tirx::thread_scope::ThreadScope;
@@ -214,17 +216,17 @@ impl Layout {
     /// The coordinate on each axis of the element at `coord` (`tirx.LayoutApply`).
     pub fn apply(
         &self,
-        coord: impl IntoIterator<Item = impl Into<Expr>>,
+        coord: impl IntoIterator<Item = impl IntoExpr>,
     ) -> Result<Map<String, Expr>> {
-        let coord = coord.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let coord = coord.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutApply").call_tuple((self, &coord))?.try_into()
     }
 
     /// The coordinate on each axis of the element at the linear index `coord`
     /// (`tirx.LayoutApplyLinear`).
-    pub fn apply_linear(&self, coord: impl Into<Expr>) -> Result<Map<String, Expr>> {
+    pub fn apply_linear(&self, coord: impl IntoExpr) -> Result<Map<String, Expr>> {
         tvm_ffi::cached_global_func!("tirx.LayoutApplyLinear")
-            .call_tuple((self, &coord.into()))?
+            .call_tuple((self, &coord.into_expr()?))?
             .try_into()
     }
 
@@ -232,11 +234,11 @@ impl Layout {
     /// (`tirx.LayoutApplyWithShape`).
     pub fn apply_with_shape(
         &self,
-        coord: impl IntoIterator<Item = impl Into<Expr>>,
-        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        coord: impl IntoIterator<Item = impl IntoExpr>,
+        shape: impl IntoIterator<Item = impl IntoExpr>,
     ) -> Result<Map<String, Expr>> {
-        let coord = coord.into_iter().map(Into::into).collect::<Array<Expr>>();
-        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let coord = coord.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
+        let shape = shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutApplyWithShape")
             .call_tuple((self, &coord, &shape))?
             .try_into()
@@ -251,12 +253,14 @@ impl Layout {
     pub fn tile(
         &self,
         outer: impl Into<TileLayout>,
-        outer_shape: impl IntoIterator<Item = impl Into<Expr>>,
-        inner_shape: impl IntoIterator<Item = impl Into<Expr>>,
+        outer_shape: impl IntoIterator<Item = impl IntoExpr>,
+        inner_shape: impl IntoIterator<Item = impl IntoExpr>,
     ) -> Result<Layout> {
         let outer = outer.into();
-        let outer_shape = outer_shape.into_iter().map(Into::into).collect::<Array<Expr>>();
-        let inner_shape = inner_shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let outer_shape =
+            outer_shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
+        let inner_shape =
+            inner_shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutTile")
             .call_tuple((self, &outer, &outer_shape, &inner_shape))?
             .try_into()
@@ -425,9 +429,9 @@ impl TileLayout {
     /// (`tirx.TileLayoutGroup`).
     pub fn group(
         &self,
-        shape: impl IntoIterator<Item = impl Into<Expr>>,
+        shape: impl IntoIterator<Item = impl IntoExpr>,
     ) -> Result<(TileLayout, Array<i64>)> {
-        let shape = shape.into_iter().map(Into::into).collect::<Array<Expr>>();
+        let shape = shape.into_iter().map(IntoExpr::into_expr).collect::<Result<Array<Expr>>>()?;
         let pair: Array<Any> = tvm_ffi::cached_global_func!("tirx.TileLayoutGroup")
             .call_tuple((self, &shape))?
             .try_into()?;

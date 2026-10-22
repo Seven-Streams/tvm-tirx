@@ -31,19 +31,61 @@
 // tvm-ffi-stubgen(import-object): crate::ir::location::Location
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::Type
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
+// tvm-ffi-stubgen(import-object): crate::ir::expr::Call
+// tvm-ffi-stubgen(import-object): crate::ir::expr::FloatImm
+// tvm-ffi-stubgen(import-object): crate::ir::expr::StringImmObj
+// tvm-ffi-stubgen(import-object): crate::ir::location::UNKNOWN_LOC
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::Ex
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::PrimOps
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::add
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::ex
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::exp
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::log
+// tvm-ffi-stubgen(import-object): crate::ir::prim::op::match_types_at
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimType
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::r#type::PtrTypeObj
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): tvm_ffi::DLDataType
+// tvm-ffi-stubgen(import-object): tvm_ffi::DLDataTypeCode
+// tvm-ffi-stubgen(import-object): tvm_ffi::INTERNAL_ERROR
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
+// tvm-ffi-stubgen(import-object): tvm_ffi::TYPE_ERROR
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
 use crate::ir::attrs::AttrsObj;
+use crate::ir::expr::Call;
 use crate::ir::expr::Expr;
+use crate::ir::expr::FloatImm;
+use crate::ir::expr::IntoExpr;
+use crate::ir::expr::StringImmObj;
 use crate::ir::location::Location;
+use crate::ir::location::UNKNOWN_LOC;
+use crate::ir::prim::op::Ex;
+use crate::ir::prim::op::PrimOps;
+use crate::ir::prim::op::add;
+use crate::ir::prim::op::ex;
+use crate::ir::prim::op::exp;
+use crate::ir::prim::op::log;
+use crate::ir::prim::op::match_types_at;
+use crate::ir::r#type::PrimType;
+use crate::ir::r#type::PrimTypeObj;
+use crate::ir::r#type::PtrTypeObj;
 use crate::ir::r#type::Type;
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Array;
+use tvm_ffi::DLDataType;
+use tvm_ffi::DLDataTypeCode;
+use tvm_ffi::INTERNAL_ERROR;
 use tvm_ffi::Map;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::String;
+use tvm_ffi::TYPE_ERROR;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/tirx.CallFFIKernelAttr
@@ -117,25 +159,195 @@ tvm_ffi::impl_object_upcast!(CallFFIKernelAttr => Attrs);
 // The native `tirx.CallFFIKernelAttr` stores its fields as given, as the generated
 // `CallFFIKernelAttr::new` does.
 
-/// `log(exp(a) + exp(b))` of the floating-point `a` and `b` (`tirx._OpLogAddExp`).
-pub fn logaddexp(a: impl Into<Expr>, b: impl Into<Expr>, loc: impl Into<Location>) -> Result<Expr> {
-    tvm_ffi::cached_global_func!("tirx._OpLogAddExp")
-        .call_tuple((&a.into(), &b.into(), &loc.into()))?
-        .try_into()
+/// `log(exp(a) + exp(b))` of the floating-point `a` and `b`, matched (C++ `tirx::logaddexp`,
+/// `tirx._OpLogAddExp`).
+pub fn logaddexp(a: impl IntoExpr, b: impl IntoExpr) -> Result<Expr> {
+    logaddexp_at(a, b, UNKNOWN_LOC)
 }
 
-/// `value` reinterpreted bit for bit as the primitive or pointer type `ty` (`tirx.reinterpret`).
-pub fn reinterpret(
+/// [`logaddexp`] with the casts at `loc`.
+pub fn logaddexp_at(a: impl IntoExpr, b: impl IntoExpr, loc: impl Into<Location>) -> Result<Expr> {
+    let (a, b) = (a.into_expr()?, b.into_expr()?);
+    for (operand, side) in [(&a, "a"), (&b, "b")] {
+        if support::prim_dtype(operand)?.code != support::FLOAT {
+            let condition = format!("{side}.ty().MatchesCode(DLDataTypeCode::kDLFloat)");
+            let message = support::repr(operand);
+            return Err(support::check_failed(INTERNAL_ERROR, &condition, &message));
+        }
+    }
+    let (a, b) = match_types_at(a, b, loc)?;
+    log(add(exp(a)?, exp(b)?)?)
+}
+
+/// Whether `dtype` is a scalar 64-bit integer, which a pointer reinterprets as.
+fn is_scalar_int64(dtype: DLDataType) -> bool {
+    support::is_scalar(dtype)
+        && dtype.bits == 64
+        && matches!(dtype.code, support::INT | support::UINT)
+}
+
+/// C++ `PrimType::StorageBytes()`.
+fn storage_bytes(dtype: DLDataType) -> Result<u64> {
+    Ok((u64::from(dtype.bits) * support::lanes(dtype)? as u64).div_ceil(8))
+}
+
+/// `value` reinterpreted bit for bit as the primitive or pointer type `ty`: a value already of
+/// that type is itself; a string takes a pointer type, a pointer a scalar 64-bit integer type and
+/// a scalar 64-bit integer a pointer type; two primitive types must have the same size (C++
+/// `tirx::reinterpret(target_ty, value, loc)`, `tirx.reinterpret`).
+pub fn reinterpret(ty: impl Into<Type>, value: impl IntoExpr) -> Result<Expr> {
+    reinterpret_at(ty, value, UNKNOWN_LOC)
+}
+
+/// [`reinterpret`] at `loc`.
+pub fn reinterpret_at(
     ty: impl Into<Type>,
-    value: impl Into<Expr>,
+    value: impl IntoExpr,
     loc: impl Into<Location>,
 ) -> Result<Expr> {
-    tvm_ffi::cached_global_func!("tirx.reinterpret")
-        .call_tuple((&ty.into(), &value.into(), &loc.into()))?
-        .try_into()
+    let (ty, value, loc) = (ty.into(), value.into_expr()?, loc.into());
+    let target_is_pointer = ty.as_node::<PtrTypeObj>().is_some();
+    let source_is_pointer = value.ty.as_node::<PtrTypeObj>().is_some();
+    let type_error = |condition: &str, message: std::string::String| {
+        Err(support::check_failed(TYPE_ERROR, condition, &message))
+    };
+    if value.as_node::<StringImmObj>().is_some() {
+        if !target_is_pointer {
+            let message = format!(
+                "String reinterpret requires a pointer target, but got {}",
+                support::repr(&ty)
+            );
+            return type_error("target_ty.as<PtrTypeNode>()", message);
+        }
+    } else if let Some(target) = ty.as_node::<PrimTypeObj>() {
+        let target_dtype = target.dtype;
+        if let Some(source) = value.ty.as_node::<PrimTypeObj>() {
+            let source_dtype = source.dtype;
+            if source_dtype == target_dtype {
+                return Ok(value);
+            }
+            if !support::is_scalable_vector(target_dtype)
+                && !support::is_scalable_vector(source_dtype)
+            {
+                let bits = |dtype: DLDataType| {
+                    Ok::<i64, tvm_ffi::Error>(
+                        i64::from(dtype.bits) * i64::from(support::lanes(dtype)?),
+                    )
+                };
+                let float4 = DLDataTypeCode::kDLFloat4_e2m1fn as u8;
+                let same_size = bits(source_dtype)? == bits(target_dtype)?
+                    || ((source_dtype.code == float4 || target_dtype.code == float4)
+                        && storage_bytes(source_dtype)? == storage_bytes(target_dtype)?);
+                if !same_size {
+                    let condition = "value_bits == target_bits || \
+                                     ((value_dtype.MatchesCode(DLDataTypeCode::kDLFloat4_e2m1fn) || \
+                                     target_prim.MatchesCode(DLDataTypeCode::kDLFloat4_e2m1fn)) && \
+                                     value_dtype.StorageBytes() == target_prim.StorageBytes())";
+                    let message = format!(
+                        "Reinterpret requires size match {} vs {}",
+                        support::repr(&ty),
+                        support::repr(&value.ty)
+                    );
+                    return Err(support::check_failed(INTERNAL_ERROR, condition, &message));
+                }
+            }
+        } else {
+            if !source_is_pointer {
+                let message = format!(
+                    "Reinterpret source must be PrimType or PtrType, but got {}",
+                    support::repr(&value.ty)
+                );
+                return type_error("value->ty.as<PtrTypeNode>()", message);
+            }
+            if !is_scalar_int64(target_dtype) {
+                let condition = "target_dtype.value().IsScalar() && target_dtype.value().bits() == 64 && \
+                                 target_dtype.value().MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt)";
+                let message = format!(
+                    "Pointer reinterpret requires a scalar 64-bit integer target, but got {}",
+                    support::repr(&ty)
+                );
+                return type_error(condition, message);
+            }
+        }
+    } else {
+        if !target_is_pointer {
+            let message = format!(
+                "Reinterpret target must be PrimType or PtrType, but got {}",
+                support::repr(&ty)
+            );
+            return type_error("target_ty.as<PtrTypeNode>()", message);
+        }
+        if let Some(source) = value.ty.as_node::<PrimTypeObj>() {
+            if !is_scalar_int64(source.dtype) {
+                let condition = "source_dtype.value().IsScalar() && source_dtype.value().bits() == 64 && \
+                                 source_dtype.value().MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt)";
+                let message = format!(
+                    "Pointer reinterpret requires a scalar 64-bit integer source, but got {}",
+                    support::repr(&value.ty)
+                );
+                return type_error(condition, message);
+            }
+        } else if !source_is_pointer {
+            let message = format!(
+                "Reinterpret source must be PrimType or PtrType, but got {}",
+                support::repr(&value.ty)
+            );
+            return type_error("value->ty.as<PtrTypeNode>()", message);
+        }
+    }
+    let op = support::cached_op("tirx.reinterpret")?;
+    Ok(Call::new(Some(&ty), op, vec![value], None, Vec::<Type>::new(), loc)?.into())
+}
+
+/// A rational approximation of `erf(arg)` on `[-4, 4]` in `bits`-bit floats, as the Metal and
+/// WebGPU backends lower `erf` (C++ `tirx::fast_erf_float_expr(arg, bits)`).
+pub fn fast_erf_float_expr(arg: impl IntoExpr, bits: u8) -> Result<Expr> {
+    let dtype = PrimType::float(bits).dtype;
+    // The C++ coefficients are `float` literals.
+    let constant =
+        |value: f32| -> Ex { FloatImm::from_dtype(dtype, f64::from(value), UNKNOWN_LOC).into() };
+    // alpha_1, alpha_3, ..., alpha_13: the odd coefficients of the numerator.
+    #[allow(clippy::excessive_precision)]
+    let alpha: [f32; 7] = [
+        -1.60960333262415e-02,
+        -2.95459980854025e-03,
+        -7.34990630326855e-04,
+        -5.69250639462346e-05,
+        -2.10102402082508e-06,
+        2.77068142495902e-08,
+        -2.72614225801306e-10,
+    ];
+    // beta_0, beta_2, ..., beta_8: the even coefficients of the denominator.
+    #[allow(clippy::excessive_precision)]
+    let beta: [f32; 5] = [
+        -1.42647390514189e-02,
+        -7.37332916720468e-03,
+        -1.68282697438203e-03,
+        -2.13374055278905e-04,
+        -1.45660718464996e-05,
+    ];
+    let x = ex(arg.into_expr()?).min(constant(4.0)).max(constant(-4.0));
+    let x2 = &x * &x;
+    // Horner's rule from the highest coefficient down, as C++ writes it out.
+    let mut p = &x2 * constant(alpha[6]) + constant(alpha[5]);
+    for coefficient in alpha[..5].iter().rev() {
+        p = &x2 * p + constant(*coefficient);
+    }
+    p = &x * p;
+    let mut q = &x2 * constant(beta[4]) + constant(beta[3]);
+    for coefficient in beta[..3].iter().rev() {
+        q = &x2 * q + constant(*coefficient);
+    }
+    p.div(q).expr()
 }
 
 /// A return from the current GPU thread, without a value (`tirx.gpu_thread_return`).
-pub fn gpu_thread_return(loc: impl Into<Location>) -> Result<Expr> {
-    tvm_ffi::cached_global_func!("tirx.gpu_thread_return").call_tuple((&loc.into(),))?.try_into()
+pub fn gpu_thread_return() -> Result<Expr> {
+    gpu_thread_return_at(UNKNOWN_LOC)
+}
+
+/// [`gpu_thread_return`] at `loc`.
+pub fn gpu_thread_return_at(loc: impl Into<Location>) -> Result<Expr> {
+    let loc: Location = loc.into();
+    tvm_ffi::cached_global_func!("tirx.gpu_thread_return").call_tuple((&loc,))?.try_into()
 }

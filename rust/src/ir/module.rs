@@ -32,11 +32,13 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::DictAttrs;
 use crate::ir::expr::Expr;
 use crate::ir::expr::GlobalVar;
+use crate::ir::expr::IntoExpr;
 use crate::ir::function::BaseFunc;
 use crate::ir::global_info::GlobalInfo;
 use crate::ir::support;
@@ -139,9 +141,9 @@ impl IRModule {
 
     /// The module of `functions` and `expr`, a function bound to its global symbol or to `main`
     /// (`ir.IRModuleFromExpr`).
-    pub fn from_expr(expr: impl Into<Expr>, functions: &Map<GlobalVar, BaseFunc>) -> Result<Self> {
+    pub fn from_expr(expr: impl IntoExpr, functions: &Map<GlobalVar, BaseFunc>) -> Result<Self> {
         tvm_ffi::cached_global_func!("ir.IRModuleFromExpr")
-            .call_tuple((&expr.into(), functions))?
+            .call_tuple((&expr.into_expr()?, functions))?
             .try_into()
     }
 

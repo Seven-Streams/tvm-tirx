@@ -28,6 +28,7 @@ mod function;
 mod location;
 mod module;
 mod op;
+mod op_def;
 mod prim;
 mod stmt;
 mod transform;

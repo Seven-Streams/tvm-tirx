@@ -92,6 +92,20 @@
 //! The unknown location is [`ir::UNKNOWN_LOC`] as a constructor argument and
 //! [`ir::Location::unknown`] as a value.
 //!
+//! The operators are written in Rust too, after `src/ir/prim/op.cc`: [`ir::prim::op::add`] and
+//! its siblings match their operand types and fold constants as C++ `add` does, and the math
+//! functions ([`ir::prim::op::floor`], [`ir::prim::op::exp`], ...) build the same calls. They
+//! take expressions or literals typed as C++ types them and build at the unknown location (the
+//! `_at` variants take one), and an [`ir::prim::op::Ex`] gives them operator syntax:
+//! `floordiv(&x + 1, 4)?` is the C++ `floordiv(x + 1, 4)`. An `Ex` passes into any function or
+//! constructor that takes an [`ir::IntoExpr`], as any expression does.
+//!
+//! An operator is defined from Rust with [`ir::OpDef`], the C++ `OpDef`: its signature
+//! ([`ir::Signature`], whose descriptors generate the validator), its attributes, and its type
+//! inference, validator and region hooks as Rust functions, which C++ calls natively. An
+//! [`ir::OpHandle`] in a `static` keeps an operator as C++ keeps one in `const Op& xxx_op()`,
+//! registering one Rust defines on first use or through [`ir::register_ops`].
+//!
 //! # Generated and hand-written code
 //!
 //! The code between a `// tvm-ffi-stubgen(begin)` and its `// tvm-ffi-stubgen(end)` is generated
