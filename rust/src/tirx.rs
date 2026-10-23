@@ -34,6 +34,7 @@ pub mod function;
 pub mod index_map;
 pub mod layout;
 pub mod op;
+pub mod op_attr;
 pub mod tensor;
 pub mod thread_scope;
 pub mod tile;

@@ -36,15 +36,19 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::ExprObj
+// tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): tvm_ffi::ObjectRefCore
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
 use crate::ir::expr::ExprObj;
+use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::String;
 // tvm-ffi-stubgen(end)
@@ -232,6 +236,20 @@ impl Op {
             .call_tuple((String::from(name), String::from(doc)))?;
         Ok(())
     }
+
+    /// Store `validator` as this operator's validator in place, as C++ `OpDef::set_validator` and
+    /// `OpDef::signature` write the registry's node: an opaque pointer to a C ABI adapter, as
+    /// `NativeFunctionView::FromNative` stores one.
+    pub(crate) fn write_validator(&self, validator: Any, custom: bool) {
+        // SAFETY: C++ `OpDef` writes these members of the registry's node in place too. No
+        // reference into the node is live, and registration is not synchronized with readers.
+        unsafe {
+            let node = ObjectArc::as_raw(ObjectRefCore::data(self)) as *mut OpObj;
+            let previous = std::ptr::replace(std::ptr::addr_of_mut!((*node).validator), validator);
+            std::ptr::addr_of_mut!((*node).validator_is_custom).write(custom);
+            drop(previous);
+        }
+    }
 }
 
 tvm_ffi::impl_object_upcast!(Op => Expr);
@@ -248,16 +266,6 @@ pub struct OpAttrMap<T> {
     _value: std::marker::PhantomData<T>,
 }
 
-/// The object header followed by `TVMFFISeqCell`, the layout `ffi.List` and `ffi.Array` share.
-#[repr(C)]
-struct SeqCell {
-    object: Object,
-    data: *const tvm_ffi::tvm_ffi_sys::TVMFFIAny,
-    size: i64,
-    capacity: i64,
-    data_deleter: Option<unsafe extern "C" fn(*mut core::ffi::c_void)>,
-}
-
 impl<T> OpAttrMap<T> {
     /// The entry of `op` in the column, unless it has none.
     fn entry(&self, op: &OpObj) -> Option<&tvm_ffi::tvm_ffi_sys::TVMFFIAny> {
@@ -265,7 +273,7 @@ impl<T> OpAttrMap<T> {
         // The cell is read on every lookup because growth may move the element buffer.
         let cell = unsafe {
             let data = tvm_ffi::object::ObjectRefCore::data(&self.column);
-            &*(ObjectArc::as_raw(data) as *const SeqCell)
+            &*(ObjectArc::as_raw(data) as *const support::SeqCell)
         };
         let index = op.index as usize;
         if index >= cell.size as usize {

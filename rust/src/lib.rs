@@ -99,6 +99,54 @@
 //! `floordiv(&x + 1, 4)?` is the C++ `floordiv(x + 1, 4)`. An `Ex` passes into any function or
 //! constructor that takes an [`ir::IntoExpr`], as any expression does.
 //!
+//! Operators are defined from Rust in [`register_ops!`] blocks, as C++ defines them in a
+//! `TVM_FFI_STATIC_INIT_BLOCK`: each item is an [`ir::OpDef`] chain, the C++ `OpDef`, with the
+//! signature ([`ir::sig`], whose descriptors generate the validator), the attributes, by the keys
+//! of [`ir::op_attr`] and [`tirx::op_attr`], and the type inference, validator and region hooks as
+//! Rust functions, which C++ calls natively:
+//!
+//! ```no_run
+//! use tvm_tirx::ir::op_attr::CALL_EFFECT_KIND;
+//! use tvm_tirx::ir::sig::{self, IntExpr};
+//! use tvm_tirx::ir::{CallEffectKind, CallObj, OpDef, OpHandle, Type};
+//! use tvm_tirx::tvm_ffi::Result;
+//!
+//! fn index_type(call: &CallObj) -> Result<Type> {
+//!     Ok(call.args.get(0)?.ty.clone())
+//! }
+//!
+//! tvm_tirx::register_ops! {
+//!     OpDef::new("my_ext.clamp", "Clamp an index to the range `[0, bound)`.")
+//!         .signature((
+//!             sig::arg::<IntExpr>("index", "The index."),
+//!             sig::arg::<IntExpr>("bound", "The exclusive upper bound."),
+//!         ))
+//!         .set_infer_type(index_type)
+//!         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
+//! }
+//!
+//! static CLAMP: OpHandle = OpHandle::new("my_ext.clamp");
+//! ```
+//!
+//! An [`ir::OpHandle`] in a `static` keeps an operator as C++ keeps one in `const Op& xxx_op()`.
+//! A block does not run when its library loads, as a C++ one does, but when the operators are
+//! registered: [`ir::register_defined_ops`] runs every block, wherever it is, and every library
+//! built on the crate exports it as the TVM FFI function `tirx_register_ops`; a handle runs them on
+//! the first lookup of an operator that is not registered.
+//!
+//! # The library Python loads
+//!
+//! The crate is also built as a shared library, which the TIRx build installs as
+//! `libtvm_tirx_rust` next to `libtvm_tirx_compiler` when it finds a cargo as new as the crate's
+//! `rust-version` (`TVM_TIRX_USE_RUST`, `AUTO` by default). `import tvm_tirx` loads it
+//! after the compiler library and calls `tirx_register_ops`, so the operators the crate defines
+//! are registered before any Python module looks for them, as the C++ ones are: `Op.get` finds
+//! them, a `Call` built in Python runs their hooks, and the TVMScript printer prints their calls.
+//! As for a C++ operator, the TVMScript builder of an operator (`T.<name>` for `tirx.<name>`) is a
+//! Python function written for it. Set `TVM_TIRX_RUST_LIBRARY` to the path of another build of the
+//! library, such as `rust/target/debug/libtvm_tirx.so` from `cargo build`, to load that one
+//! instead. `examples/define_ops.rs` builds a library of its own the same way.
+//!
 //! # Defining a type in Rust
 //!
 //! [`tvm_ffi::rs_class`] defines a new IR type, a type of expressions as [`ir::PrimType`] and
@@ -241,3 +289,14 @@ pub mod target;
 pub mod tirx;
 
 pub use tvm_ffi;
+
+// The registration entry of every library built on the crate, which `import tvm_tirx` calls on
+// `libtvm_tirx_rust`: `__tvm_ffi_tirx_register_ops`, the TVM FFI function `tirx_register_ops` of
+// the library as `tvm_ffi.load_module` loads it.
+tvm_ffi::tvm_ffi_dll_export_typed_func!(tirx_register_ops, ir::register_defined_ops);
+
+/// What the exported macros expand to.
+#[doc(hidden)]
+pub mod __private {
+    pub use linkme;
+}

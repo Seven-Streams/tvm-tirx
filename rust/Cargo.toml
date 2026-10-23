@@ -19,14 +19,24 @@
 name = "tvm-tirx"
 version = "0.1.0-alpha.1"
 edition = "2021"
+# The oldest toolchain that builds the crate and tvm-ffi; CMake checks cargo against it.
+rust-version = "1.84"
 license = "Apache-2.0"
 publish = false
 
 [lib]
 name = "tvm_tirx"
+# The shared library is the one `import tvm_tirx` loads, installed as `libtvm_tirx_rust`.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+linkme = "0.3"
 tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
+
+# A library of operators defined in Rust, which `tests/python/ir/test_op_rust.py` loads.
+[[example]]
+name = "define_ops"
+crate-type = ["cdylib"]
 
 # Standalone crate: not a member of any enclosing workspace.
 [workspace]

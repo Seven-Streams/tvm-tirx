@@ -77,8 +77,9 @@ CMAKE_ARGS="-DTVM_TIRX_USE_LLVM=ON -DTVM_TIRX_USE_CUDA=OFF" \
 ```
 
 The main switches are `TVM_TIRX_USE_LLVM`, `TVM_TIRX_USE_CUDA`,
-`TVM_TIRX_USE_Z3`, and `TVM_TIRX_BUILD_TESTS`. Device runtimes such as Metal,
-ROCm, Vulkan, and OpenCL have their own `TVM_TIRX_USE_*` options.
+`TVM_TIRX_USE_Z3`, `TVM_TIRX_USE_RUST`, and `TVM_TIRX_BUILD_TESTS`. Device
+runtimes such as Metal, ROCm, Vulkan, and OpenCL have their own
+`TVM_TIRX_USE_*` options.
 
 ### C++-only build
 
@@ -133,6 +134,11 @@ uv run --no-sync tvm-ffi-stubgen rust/src --target rust --dlls build/lib/libtvm_
 uv run --no-sync cargo fmt --check --manifest-path rust/Cargo.toml
 uv run --no-sync cargo test --manifest-path rust/Cargo.toml
 ```
+
+The editable install also builds the crate as `libtvm_tirx_rust` when it finds a
+cargo as new as the crate's `rust-version` (`TVM_TIRX_USE_RUST=AUTO`; rustup's
+cargo is preferred). `import tvm_tirx` loads it and registers the operators of its
+`register_ops!` blocks, so re-run the editable install after changing them.
 
 ## Linting
 

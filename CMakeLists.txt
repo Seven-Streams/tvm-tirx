@@ -76,6 +76,10 @@ tvm_tirx_option(TVM_TIRX_USE_METAL BOOL OFF "Build with Metal")
 tvm_tirx_option(TVM_TIRX_USE_OPENMP STRING OFF "OpenMP thread pool implementation (OFF, gnu, intel)")
 set_property(CACHE TVM_TIRX_USE_OPENMP PROPERTY STRINGS OFF gnu intel)
 
+# ######### Rust ##########
+
+tvm_tirx_option(TVM_TIRX_USE_RUST STRING AUTO "Build the operators written in Rust (rust/) with cargo (OFF, ON, AUTO)")
+
 # ######### Dependencies ##########
 
 # Use the same source-built FFI targets throughout this build graph.
@@ -243,6 +247,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT "${TVM_TIRX_USE_LLVM}" MATCHES ${I
   target_link_options(tvm_tirx_compiler PRIVATE "-Wl,--no-relax" "-Wl,--as-needed")
 endif()
 include(cmake/modules/Logging.cmake)
+include(cmake/modules/Rust.cmake)
 
 # ######### Library configuration ##########
 

@@ -18,9 +18,12 @@
 # pylint: disable=invalid-name, import-outside-toplevel
 """Base library for TVM."""
 
+import ctypes
 import os
+import sys
 from pathlib import Path
 
+import tvm_ffi
 from tvm_ffi import libinfo as tvm_ffi_libinfo
 from tvm_ffi.libinfo import load_lib_ctypes
 
@@ -60,6 +63,25 @@ if not _RUNTIME_ONLY:
         _LOADED_LIBS["tvm_tirx_compiler"] = load_lib_ctypes(
             "tvm_tirx", "tvm_tirx_compiler", "RTLD_LOCAL", extra_lib_paths=_lib_paths
         )
+
+# The operators written in Rust are in libtvm_tirx_rust, when the build has it
+# (``TVM_TIRX_USE_RUST``). They are registered now, as loading the compiler library registered the
+# C++ ones, before any module looks for them; ``TVM_TIRX_RUST_LIBRARY`` names another build of the
+# library to load instead, such as ``rust/target/debug/libtvm_tirx.so``. Otherwise only the one next
+# to the compiler library is loaded, which the same build made: one found elsewhere, such as on
+# ``LD_LIBRARY_PATH``, may be another build's.
+if not _RUNTIME_ONLY:
+    _rust_lib_path = os.environ.get("TVM_TIRX_RUST_LIBRARY")
+    if not _rust_lib_path:
+        _rust_lib_path = Path(_LOADED_LIBS["tvm_tirx_compiler"]._name).resolve().parent / (
+            "libtvm_tirx_rust.dylib" if sys.platform == "darwin" else "libtvm_tirx_rust.so"
+        )
+        if not _rust_lib_path.is_file():
+            _rust_lib_path = None
+    if _rust_lib_path:
+        # The handle keeps the library, and the hooks it registers, loaded for the process.
+        _LOADED_LIBS["tvm_tirx_rust"] = ctypes.CDLL(str(_rust_lib_path), ctypes.RTLD_LOCAL)
+        tvm_ffi.load_module(str(_rust_lib_path)).tirx_register_ops()
 
 if _RUNTIME_ONLY:
     from tvm_ffi import registry as _tvm_ffi_registry
