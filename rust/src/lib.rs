@@ -138,14 +138,13 @@
 //!
 //! The crate is also built as a shared library, which the TIRx build installs as
 //! `libtvm_tirx_rust` next to `libtvm_tirx_compiler` when it finds a cargo as new as the crate's
-//! `rust-version` (`TVM_TIRX_USE_RUST`, `AUTO` by default). `import tvm_tirx` loads it
-//! after the compiler library and calls `tirx_register_ops`, so the operators the crate defines
-//! are registered before any Python module looks for them, as the C++ ones are: `Op.get` finds
-//! them, a `Call` built in Python runs their hooks, and the TVMScript printer prints their calls.
-//! As for a C++ operator, the TVMScript builder of an operator (`T.<name>` for `tirx.<name>`) is a
-//! Python function written for it. Set `TVM_TIRX_RUST_LIBRARY` to the path of another build of the
-//! library, such as `rust/target/debug/libtvm_tirx.so` from `cargo build`, to load that one
-//! instead. `examples/define_ops.rs` builds a library of its own the same way.
+//! `rust-version` (`TVM_TIRX_USE_RUST`, `AUTO` by default). `import tvm_tirx` loads it through
+//! the backend autoload (`tvm_tirx.backend.rust`) and calls `tirx_register_ops`, so the operators
+//! the crate defines are registered by the time the import returns, as the C++ ones are: `Op.get`
+//! finds them, a `Call` built in Python runs their hooks, and the TVMScript printer prints their
+//! calls. As for a C++ operator, the TVMScript builder of an operator (`T.<name>` for
+//! `tirx.<name>`) is a Python function written for it. `examples/define_ops.rs` builds a library
+//! of its own the same way, which `tvm_ffi.load_module(path).tirx_register_ops()` registers.
 //!
 //! # Defining a type in Rust
 //!

@@ -14,11 +14,11 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Operators defined in Rust are registered on ``import tvm_tirx``, as C++ ones are.
+"""Operators defined in Rust are registered when their library is loaded, and used as C++ ones are.
 
-``rust/examples/define_ops.rs`` is built by cargo and loaded in place of libtvm_tirx_rust
-(``TVM_TIRX_RUST_LIBRARY``) by a fresh interpreter, which then uses its operators as it uses C++
-ones: their TVMScript builders are Python functions written for them.
+``rust/examples/define_ops.rs`` is built by cargo and loaded by a fresh interpreter, as
+``import tvm_tirx`` loads libtvm_tirx_rust, which then uses its operators as it uses C++ ones:
+their TVMScript builders are Python functions written for them.
 """
 
 import os
@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -65,26 +66,49 @@ def define_ops_library():
         [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ops"], check=True
     )
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
-    name = "libdefine_ops.dylib" if sys.platform == "darwin" else "libdefine_ops.so"
+    name = {"darwin": "libdefine_ops.dylib", "win32": "define_ops.dll"}.get(
+        sys.platform, "libdefine_ops.so"
+    )
     return target_dir / "debug" / "examples" / name
 
 
 def run_python(code, library):
-    """Run `code` in a fresh interpreter that loads `library` as libtvm_tirx_rust."""
-    env = dict(os.environ, TVM_TIRX_RUST_LIBRARY=str(library))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(code)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """Run `code` in a fresh interpreter, with the path of `library` as its argument.
+
+    The code runs from a file: TVMScript reads the source of the functions it parses, which Python
+    keeps for code passed with `-c` only from 3.13 on.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "script.py"
+        script.write_text(textwrap.dedent(code))
+        result = subprocess.run(
+            [sys.executable, str(script), str(library)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     assert result.returncode == 0, result.stderr
 
 
-def test_rust_operators_are_registered_on_import(define_ops_library):
+def test_library_is_loaded_on_import():
+    """``import tvm_tirx`` loads libtvm_tirx_rust, when the build has it, as a backend."""
+    from tvm_ffi.libinfo import _find_library_by_basename  # pylint: disable=import-outside-toplevel
+
+    from tvm_tirx.base import _LOADED_LIBS  # pylint: disable=import-outside-toplevel
+
+    runtime_dir = Path(_LOADED_LIBS["tvm_runtime"]._name).resolve().parent
+    try:
+        _find_library_by_basename("tvm_tirx", "tvm_tirx_rust", extra_lib_paths=[runtime_dir])
+    except RuntimeError:
+        pytest.skip("the build has no libtvm_tirx_rust (TVM_TIRX_USE_RUST)")
+    assert "tvm_tirx_rust" in _LOADED_LIBS
+
+
+def test_rust_operators_are_registered_by_their_library(define_ops_library):
     run_python(
         """
+        import sys
+
         import tvm_ffi
         import tvm_tirx
         from tvm_tirx import ir
@@ -92,7 +116,8 @@ def test_rust_operators_are_registered_on_import(define_ops_library):
         from tvm_tirx.script.ir_builder.base import auto_emit_void_call
         from tvm_tirx.tirx.script import ir_builder
 
-        # Registered on import, with the doc comment and signature the Rust definition gives.
+        # Registered by the library, with the doc comment and signature the Rust definition gives.
+        tvm_ffi.load_module(sys.argv[1]).tirx_register_ops()
         clamp = ir.Op.get("tirx.example_clamp")
         assert clamp.doc == "Clamp an index to the range `[0, bound)`."
         assert [arg.name for arg in clamp.args_info] == ["index", "bound"]

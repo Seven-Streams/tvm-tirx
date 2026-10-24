@@ -21,8 +21,8 @@
 //!
 //! `cargo build --example define_ops` builds this as `target/debug/examples/libdefine_ops.so`,
 //! which exports `tirx_register_ops`, as every library built on `tvm_tirx` does.
-//! `tests/python/ir/test_op_rust.py` loads it in place of `libtvm_tirx_rust`
-//! (`TVM_TIRX_RUST_LIBRARY`), so `import tvm_tirx` registers these operators. As a C++ operator
+//! `tests/python/ir/test_op_rust.py` loads it and calls `tirx_register_ops`, as `import tvm_tirx`
+//! does for `libtvm_tirx_rust`, which registers these operators. As a C++ operator
 //! does, each has its TVMScript builder written in Python, which the test writes:
 //! `T.example_clamp(i, n)`, `T.example_mark()`, `T.example_hint(i, attrs={..})` and
 //! `with T.example_loop(n) as j:`.

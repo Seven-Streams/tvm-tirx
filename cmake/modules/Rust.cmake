@@ -16,8 +16,9 @@
 # under the License.
 
 # The crate in rust/, built by cargo as a shared library and installed as libtvm_tirx_rust next to
-# libtvm_tirx_compiler. `import tvm_tirx` loads it after the compiler library and registers the
-# operators it defines (python/tvm_tirx/base.py), as loading the compiler registers the C++ ones.
+# libtvm_tirx_compiler. `import tvm_tirx` loads it through the backend autoload and registers the
+# operators it defines (python/tvm_tirx/backend/rust), as loading the compiler registers the C++
+# ones.
 #
 # TVM_TIRX_USE_RUST is ON, OFF or AUTO. AUTO builds the library when it can: not on Windows, with
 # the crate's sources (a source distribution has none), with a cargo at least as new as the
