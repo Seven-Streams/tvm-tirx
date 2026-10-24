@@ -79,7 +79,9 @@ if not _RUNTIME_ONLY:
         if not _rust_lib_path.is_file():
             _rust_lib_path = None
     if _rust_lib_path:
-        # The handle keeps the library, and the hooks it registers, loaded for the process.
+        # Loading the library registers its operators, and the handle keeps it, and the hooks it
+        # registers, loaded for the process; ``tirx_register_ops`` raises the error of a block
+        # that failed.
         _LOADED_LIBS["tvm_tirx_rust"] = ctypes.CDLL(str(_rust_lib_path), ctypes.RTLD_LOCAL)
         tvm_ffi.load_module(str(_rust_lib_path)).tirx_register_ops()
 

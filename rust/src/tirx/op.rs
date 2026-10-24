@@ -221,7 +221,7 @@ pub fn reinterpret_at(
                 "String reinterpret requires a pointer target, but got {}",
                 support::repr(&ty)
             );
-            return type_error("target_ty.as<PtrTypeNode>()", message);
+            return type_error("target_ty.as<PtrTypeObj>()", message);
         }
     } else if let Some(target) = ty.as_node::<PrimTypeObj>() {
         let target_dtype = target.dtype;
@@ -261,7 +261,7 @@ pub fn reinterpret_at(
                     "Reinterpret source must be PrimType or PtrType, but got {}",
                     support::repr(&value.ty)
                 );
-                return type_error("value->ty.as<PtrTypeNode>()", message);
+                return type_error("value->ty.as<PtrTypeObj>()", message);
             }
             if !is_scalar_int64(target_dtype) {
                 let condition = "target_dtype.value().IsScalar() && target_dtype.value().bits() == 64 && \
@@ -279,7 +279,7 @@ pub fn reinterpret_at(
                 "Reinterpret target must be PrimType or PtrType, but got {}",
                 support::repr(&ty)
             );
-            return type_error("target_ty.as<PtrTypeNode>()", message);
+            return type_error("target_ty.as<PtrTypeObj>()", message);
         }
         if let Some(source) = value.ty.as_node::<PrimTypeObj>() {
             if !is_scalar_int64(source.dtype) {
@@ -296,7 +296,7 @@ pub fn reinterpret_at(
                 "Reinterpret source must be PrimType or PtrType, but got {}",
                 support::repr(&value.ty)
             );
-            return type_error("value->ty.as<PtrTypeNode>()", message);
+            return type_error("value->ty.as<PtrTypeObj>()", message);
         }
     }
     let op = support::cached_op("tirx.reinterpret")?;

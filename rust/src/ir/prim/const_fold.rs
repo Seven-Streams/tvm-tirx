@@ -403,15 +403,16 @@ pub(super) fn floormod(a: &Expr, b: &Expr) -> Folded {
     Ok(None)
 }
 
-/// `TryConstFold<Min>`: two constants, or an operand with itself. Floats compare as `std::min`
-/// does, keeping the first of two unordered values.
+/// `TryConstFold<Min>`: two constants, or an operand with itself. Of two floats, the first is kept
+/// when it is NaN or less than the second, and the second otherwise: a NaN in either operand is
+/// the result, and of two equal values (`0.0` and `-0.0`) the second is.
 pub(super) fn min(a: &Expr, b: &Expr) -> Folded {
     let dtype = support::prim_dtype(a)?;
     if let (Some(x), Some(y)) = (int(a), int(b)) {
         return int_imm(dtype, x.min(y).clone());
     }
     if let (Some(x), Some(y)) = (float(a), float(b)) {
-        return float_imm(dtype, if y < x { y } else { x });
+        return keep(if x.is_nan() || x < y { a } else { b });
     }
     if a.same_as(b) {
         return keep(a);
@@ -419,14 +420,14 @@ pub(super) fn min(a: &Expr, b: &Expr) -> Folded {
     Ok(None)
 }
 
-/// `TryConstFold<Max>`, as [`min`] (`std::max` keeps the first of two unordered values).
+/// `TryConstFold<Max>`, as [`min`]: the first float is kept when it is NaN or greater.
 pub(super) fn max(a: &Expr, b: &Expr) -> Folded {
     let dtype = support::prim_dtype(a)?;
     if let (Some(x), Some(y)) = (int(a), int(b)) {
         return int_imm(dtype, x.max(y).clone());
     }
     if let (Some(x), Some(y)) = (float(a), float(b)) {
-        return float_imm(dtype, if x < y { y } else { x });
+        return keep(if x.is_nan() || x > y { a } else { b });
     }
     if a.same_as(b) {
         return keep(a);
