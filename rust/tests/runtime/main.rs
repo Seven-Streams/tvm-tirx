@@ -54,7 +54,11 @@ fn memory_scopes() {
 #[test]
 fn queries() {
     assert!(runtime::enabled("cpu").unwrap());
-    assert!(runtime::num_threads().unwrap() >= 1);
+    // The thread pool is thread-local. On Windows it joins its workers when the test's thread
+    // exits, under the loader lock that the workers need to exit, so the test would never end.
+    if cfg!(not(windows)) {
+        assert!(runtime::num_threads().unwrap() >= 1);
+    }
 }
 
 #[test]

@@ -75,6 +75,11 @@ jobs:
         run: >-
           uv run --no-sync python -m pytest -v tests/python/codegen/llvm/test_minimal.py
           tests/python/runtime/test_validate_wheel_library.py tests/python/script
+          tests/python/ir/test_op_rust.py
+      - name: Rust tests
+        timeout-minutes: 20
+        shell: bash
+        run: cargo test --manifest-path rust/Cargo.toml
       - name: Minimal Metal Compile-Only
         shell: bash
         run: |
@@ -125,3 +130,8 @@ jobs:
         run: >-
           uv run --no-sync python -m pytest -v tests/python/codegen/llvm/test_minimal.py
           tests/python/runtime/test_validate_wheel_library.py tests/python/script
+          tests/python/ir/test_op_rust.py
+      - name: Rust tests
+        timeout-minutes: 20
+        shell: cmd /C call {0}
+        run: cargo test --manifest-path rust/Cargo.toml

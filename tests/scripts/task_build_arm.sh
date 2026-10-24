@@ -18,10 +18,16 @@
 
 set -euxo pipefail
 
+source ./tests/scripts/task_install_rust.sh
+
 export CMAKE_ARGS="
     -DTVM_TIRX_BUILD_TESTS=ON
+    -DTVM_TIRX_USE_RUST=ON
     -DCMAKE_CXX_FLAGS=-Werror
 "
 uv build --wheel --no-build-isolation --offline --out-dir dist .
 
 ./build/tirx_cpptest
+
+# build/rust/bin holds the tvm-tirx-config and tvm-ffi-config of this build, which print build/lib.
+PATH="$PWD/build/rust/bin:$PATH" cargo test --manifest-path rust/Cargo.toml

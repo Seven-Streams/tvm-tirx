@@ -18,10 +18,19 @@
 
 set -euxo pipefail
 
+source ./tests/scripts/task_install_rust.sh
+
 export CMAKE_ARGS="
     -DTVM_TIRX_BUILD_TESTS=ON
+    -DTVM_TIRX_USE_RUST=ON
     -DCMAKE_CXX_FLAGS='-Wno-error=range-loop-construct -Wno-error=comment'
 "
 uv build --wheel --no-build-isolation --offline --out-dir dist .
 
 ./build/tirx_cpptest
+
+# build/rust/bin holds the tvm-tirx-config and tvm-ffi-config of this build, which print build/lib.
+PATH="$PWD/build/rust/bin:$PATH" cargo test --manifest-path rust/Cargo.toml
+
+# The bindings that tvm-ffi-stubgen generates in rust/ must match the types of this build.
+uv run --no-sync python -m tvm_ffi.stub.cli rust/src --target rust --dlls build/lib/libtvm_tirx_compiler.so --check
