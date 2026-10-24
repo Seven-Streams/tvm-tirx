@@ -50,4 +50,87 @@ pub use thread_scope::*;
 pub use r#type::*;
 
 // tvm-ffi-stubgen(begin): import-section
+use crate::sym::ConstraintContext;
+use std::ops::Deref;
+use tvm_ffi::FieldGetter;
+use tvm_ffi::Object;
+use tvm_ffi::ObjectArc;
+use tvm_ffi::ObjectCore;
+use tvm_ffi::Result;
+
+/// Header-only stand-in for the builtin `ffi.StructuralMutator`; it only carries the ancestor depth.
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(tvm_ffi::derive::Object)]
+#[type_key = "ffi.StructuralMutator"]
+struct FfiStructuralMutatorObj {
+    base: Object,
+}
+
+/// Header-only stand-in for the builtin `ffi.StructuralVisitor`; it only carries the ancestor depth.
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(tvm_ffi::derive::Object)]
+#[type_key = "ffi.StructuralVisitor"]
+struct FfiStructuralVisitorObj {
+    base: Object,
+}
+// tvm-ffi-stubgen(end)
+
+// tvm-ffi-stubgen(begin): object/tirx.StructuralMutatorWithConstraintContext
+/// Opaque: parent 'ffi.StructuralMutator' is opaque (no-mirror). Fields are read through the C ABI getters.
+#[repr(C)]
+#[derive(tvm_ffi::derive::Object)]
+#[type_key = "tirx.StructuralMutatorWithConstraintContext"]
+pub struct StructuralMutatorWithConstraintContextObj {
+    base: FfiStructuralMutatorObj,
+}
+
+#[repr(C)]
+#[derive(tvm_ffi::derive::ObjectRef, Clone)]
+pub struct StructuralMutatorWithConstraintContext {
+    base: ObjectArc<StructuralMutatorWithConstraintContextObj>,
+}
+
+impl Deref for StructuralMutatorWithConstraintContext {
+    type Target = StructuralMutatorWithConstraintContextObj;
+    fn deref(&self) -> &StructuralMutatorWithConstraintContextObj {
+        &self.base
+    }
+}
+
+impl StructuralMutatorWithConstraintContextObj {
+    pub fn constraints(&self) -> Result<ConstraintContext> {
+        FieldGetter::new(Self::type_index(), "constraints")?.get(self)
+    }
+}
+// tvm-ffi-stubgen(end)
+
+// tvm-ffi-stubgen(begin): object/tirx.StructuralVisitorWithConstraintContext
+/// Opaque: parent 'ffi.StructuralVisitor' is opaque (no-mirror). Fields are read through the C ABI getters.
+#[repr(C)]
+#[derive(tvm_ffi::derive::Object)]
+#[type_key = "tirx.StructuralVisitorWithConstraintContext"]
+pub struct StructuralVisitorWithConstraintContextObj {
+    base: FfiStructuralVisitorObj,
+}
+
+#[repr(C)]
+#[derive(tvm_ffi::derive::ObjectRef, Clone)]
+pub struct StructuralVisitorWithConstraintContext {
+    base: ObjectArc<StructuralVisitorWithConstraintContextObj>,
+}
+
+impl Deref for StructuralVisitorWithConstraintContext {
+    type Target = StructuralVisitorWithConstraintContextObj;
+    fn deref(&self) -> &StructuralVisitorWithConstraintContextObj {
+        &self.base
+    }
+}
+
+impl StructuralVisitorWithConstraintContextObj {
+    pub fn constraints(&self) -> Result<ConstraintContext> {
+        FieldGetter::new(Self::type_index(), "constraints")?.get(self)
+    }
+}
 // tvm-ffi-stubgen(end)
