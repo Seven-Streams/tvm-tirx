@@ -32,14 +32,14 @@ use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr, PrimExpr, PrimVar};
 use tvm_tirx::ir::{
     register_defined_ops, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
-    FuncType, IntImm, Op, OpDef, OpHandle, PrimType, RegionStmt, RegionStmtObj, StringImm, Type,
-    Var, VarObj, UNKNOWN_LOC,
+    FuncType, IntImm, Op, OpDef, OpHandle, OpRegistration, PrimType, RegionStmt, RegionStmtObj,
+    StringImm, Type, Var, VarObj, OP_REGISTRATIONS, UNKNOWN_LOC,
 };
 use tvm_tirx::tirx::{CallFFIKernelAttr, TensorVar};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 use tvm_tirx::tvm_ffi::{
-    Any, Array, Error, ErrorKind, Map, ObjectRefCast, ObjectRefCore, Result, String as FfiString,
-    ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
+    Any, Array, Error, ErrorKind, Function, Map, ObjectRefCast, ObjectRefCore, Result,
+    String as FfiString, ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
 };
 
 use super::{int32, parse_dtype, tensor_var};
@@ -457,6 +457,21 @@ mod failing {
     }
 }
 
+/// The blocks of `module` in this test binary.
+fn blocks_of(module: &str) -> Vec<&'static OpRegistration> {
+    let prefix = format!("ir::op_def{module}:");
+    let of_module = |identity: &str| {
+        identity
+            .strip_prefix(&prefix)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    OP_REGISTRATIONS.iter().filter(|block| of_module(&block.identity())).collect()
+}
+
+fn is_block_registered(block: &OpRegistration) -> bool {
+    Function::get_global(&block.marker()).is_ok()
+}
+
 static IDENTITY: OpHandle = OpHandle::new("rust_test.defined_identity");
 static LAUNCH: OpHandle = OpHandle::new("rust_test.launch");
 static PANICKING: OpHandle = OpHandle::new("rust_test.panicking_region");
@@ -528,11 +543,10 @@ fn region(
 fn register_ops_blocks_define_operators() {
     let _serial = serial();
 
-    // The first lookup through a handle of an operator not registered runs every block; a block
-    // that fails does not keep the others from registering theirs.
-    assert!(Op::get("rust_test.defined_identity").is_err(), "not registered before");
-    let identity = IDENTITY.get().unwrap();
-    assert!(identity.same_as(&Op::get("rust_test.defined_identity").unwrap()));
+    // The blocks ran when the test binary loaded; a block that fails does not keep the others from
+    // registering theirs.
+    let identity = Op::get("rust_test.defined_identity").unwrap();
+    assert!(identity.same_as(&IDENTITY.get().unwrap()));
     assert_eq!(identity.doc.as_str(), "Return the value.\n\nThe documentation is dedented.");
     assert_eq!(identity.args_info.get(0).unwrap().name.as_str(), "value");
     let effect = Op::attr_map::<i64>("TCallEffectKind").unwrap().unwrap();
@@ -540,7 +554,7 @@ fn register_ops_blocks_define_operators() {
     let elsewhere = Op::get("rust_test.defined_elsewhere").unwrap();
     assert_eq!(elsewhere.doc.as_str(), "An operator in another module.");
     let fixed = Op::attr_map::<Type>("TFixedReturnType").unwrap().unwrap();
-    assert!(fixed.get(&elsewhere).unwrap().unwrap().same_as(&PrimType::void()));
+    assert!(structural_equal(&fixed.get(&elsewhere).unwrap().unwrap(), &PrimType::void()));
 
     // `register_defined_ops` reports the blocks that failed together, each with its first error;
     // a block stops at its first failure, and a failed block does not run again.
@@ -556,6 +570,13 @@ fn register_ops_blocks_define_operators() {
     assert!(message.contains("is registered before"), "{message}");
     assert!(Op::get("rust_test.after_broken").is_err(), "the block stopped");
     assert_eq!(register_defined_ops().unwrap_err().message(), message);
+
+    // A block that succeeds is marked registered for the other libraries of the process; one that
+    // fails is not, so it fails in each of them.
+    assert!(blocks_of("").into_iter().chain(blocks_of("::elsewhere")).all(is_block_registered));
+    let failing = blocks_of("::failing");
+    assert_eq!(failing.len(), 2);
+    assert!(!failing.into_iter().any(is_block_registered));
 
     // The handle keeps the operator: the Rust `FInferType` types a Call of it, and another thread
     // sees the same operator.
@@ -630,4 +651,49 @@ fn register_ops_blocks_define_operators() {
         UNKNOWN_LOC,
     );
     assert!(built.is_err(), "a panicking hook fails the constructor");
+}
+
+#[test]
+fn a_block_another_library_registered_is_skipped() {
+    let _serial = serial();
+    fn register() -> Result<()> {
+        OpDef::new("rust_test.registered_once", "").op()?;
+        Ok(())
+    }
+    // One block in two libraries, as one of a crate both link.
+    let text = r#"OpDef::new("rust_test.registered_once", "")"#;
+    let block = || OpRegistration::__new("ext::shared", 3, "0.1.0", text, register);
+    let (first, second) = (block(), block());
+    assert_eq!(first.marker(), second.marker());
+
+    // The first library registers the operator and marks the block; the second skips it, where
+    // registering the name again would fail.
+    first.register().unwrap();
+    assert!(is_block_registered(&first));
+    let op = Op::get("rust_test.registered_once").unwrap();
+    second.register().unwrap();
+    assert!(Op::get("rust_test.registered_once").unwrap().same_as(&op));
+
+    // Another version of the crate is another block, whose name is already registered.
+    let other = OpRegistration::__new("ext::shared", 3, "0.2.0", text, register);
+    assert!(other.register().unwrap_err().message().contains("is registered before"));
+}
+
+#[test]
+fn register_ops_block_identity_is_its_crate_version_and_text() {
+    fn register() -> Result<()> {
+        Ok(())
+    }
+    let identity = |version, text| OpRegistration::__new("ext::ops", 7, version, text, register);
+    let text = r#"OpDef::new("ext.clamp", "Clamp.").set_infer_type(first_arg_type)"#;
+    let block = identity("0.1.0", text).identity();
+    assert!(block.starts_with("ext::ops:7@0.1.0#"), "{block}");
+
+    // The same block in another library, whose compiler may space the tokens otherwise.
+    let spaced = "OpDef :: new(\"ext.clamp\", \"Clamp.\")\n    . set_infer_type(first_arg_type)";
+    assert_eq!(identity("0.1.0", spaced).identity(), block);
+    // A block of another version of the crate, or whose text differs, is another block.
+    assert_ne!(identity("0.1.1", text).identity(), block);
+    let renamed = text.replace("ext.clamp", "ext.clip");
+    assert_ne!(identity("0.1.0", &renamed).identity(), block);
 }

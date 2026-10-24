@@ -21,10 +21,9 @@
 //!
 //! `cargo build --example define_ops` builds this as `target/debug/examples/libdefine_ops.so`,
 //! which exports `tirx_register_ops`, as every library built on `tvm_tirx` does.
-//! `tests/python/ir/test_op_rust.py` loads it and calls `tirx_register_ops`, as `import tvm_tirx`
-//! does for `libtvm_tirx_rust`, which registers these operators and gives each its TVMScript
-//! builder: `T.example_clamp(i, n)`, `T.example_mark()`, `my_ext.hint(i, attrs={..})` and
-//! `with T.example_loop(n) as j:`.
+//! `tests/python/ir/test_op_rust.py` loads it, which registers these operators and gives each its
+//! TVMScript builder, as `import tvm_tirx` loads `libtvm_tirx_rust`: `T.example_clamp(i, n)`,
+//! `T.example_mark()`, `my_ext.hint(i, attrs={..})` and `with T.example_loop(n) as j:`.
 
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr};
