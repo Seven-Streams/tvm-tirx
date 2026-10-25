@@ -17,18 +17,21 @@
  * under the License.
  */
 
-//! Operators defined in Rust, in a library of their own.
+//! Operators and a type defined in Rust, in a library of their own.
 //!
-//! `cargo build --example define_ops` builds this as `target/debug/examples/libdefine_ops.so`,
-//! which exports `tirx_register_ops`, as every library built on `tvm_tirx` does.
+//! `cargo build --example define_ir` builds this as `target/debug/examples/libdefine_ir.so`,
+//! which exports `tirx_register_ir`, as every library built on `tvm_tirx` does.
 //! `tests/python/ir/test_op_rust.py` loads it, which registers these operators and gives each its
 //! TVMScript builder, as `import tvm_tirx` loads `libtvm_tirx_rust`: `T.example_clamp(i, n)`,
-//! `T.example_mark()`, `my_ext.hint(i, attrs={..})` and `with T.example_loop(n) as j:`.
+//! `T.example_mark()`, `my_ext.hint(i, attrs={..})` and `with T.example_loop(n) as j:`; and
+//! registers the type, with its class `T.ExamplePair`.
 
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr};
-use tvm_tirx::ir::{CallEffectKind, CallObj, DictAttrs, Expr, OpDef, PrimType, Type, Var, UNKNOWN_LOC};
-use tvm_tirx::tvm_ffi::{Array, ObjectRefCast, Result};
+use tvm_tirx::ir::{
+    CallEffectKind, CallObj, DictAttrs, Expr, OpDef, PrimType, Type, TypeObj, Var, UNKNOWN_LOC,
+};
+use tvm_tirx::tvm_ffi::{self, rs_class, Array, ObjectRefCast, Result};
 
 fn first_arg_type(call: &CallObj) -> Result<Type> {
     Ok(call.args.get(0)?.ty.clone())
@@ -59,6 +62,19 @@ tvm_tirx::register_ops! {
     OpDef::new("tirx.example_loop", "Run the body for each index in `[0, extent)`.")
         .signature(sig::arg::<IntExpr>("extent", "The number of iterations."))
         .set_region_body_params(loop_index);
+}
+
+// A type, which Python constructs from its fields, `T.ExamplePair(T.int32, T.float32)`, as it
+// constructs a C++ type.
+tvm_tirx::register_types! {
+    /// The type of a pair of values.
+    #[rs_class("tirx.ExamplePairType", final)]
+    pub struct ExamplePairTypeObj {
+        base: TypeObj,
+        pub first: Type,
+        pub second: Type,
+    }
+    def_object_ref!(pub ExamplePairType, Type, ExamplePairTypeObj);
 }
 
 // A block can be anywhere in the library.

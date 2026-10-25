@@ -18,7 +18,7 @@
  */
 
 //! Tests of `ir::op_def`: operators registered from Rust, by an `OpDef` or in `register_ops!`
-//! blocks, which `register_defined_ops` or the first lookup through an `OpHandle` runs, are used by
+//! blocks, which `register_defined_ir` or the first lookup through an `OpHandle` runs, are used by
 //! the native registry, `Call` constructor and validation, and their type inference, validators
 //! and region contracts are native hooks.
 //!
@@ -31,18 +31,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr, PrimExpr, PrimVar};
 use tvm_tirx::ir::{
-    register_defined_ops, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
-    FuncType, IntImm, Op, OpDef, OpHandle, OpRegistration, PrimType, RegionStmt, RegionStmtObj,
-    StringImm, Type, Var, VarObj, OP_REGISTRATIONS, UNKNOWN_LOC,
+    register_defined_ir, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
+    FuncType, IntImm, Op, OpDef, OpHandle, PrimType, RegionStmt, RegionStmtObj, Registration,
+    StringImm, Type, Var, VarObj, REGISTRATIONS, UNKNOWN_LOC,
 };
 use tvm_tirx::tirx::{CallFFIKernelAttr, TensorVar};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 use tvm_tirx::tvm_ffi::{
-    Any, Array, Error, ErrorKind, Function, Map, ObjectRefCast, ObjectRefCore, Result,
-    String as FfiString, ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
+    Any, AnyView, Array, Error, ErrorKind, Function, Map, ObjectCore, ObjectRefCast, ObjectRefCore,
+    Result, String as FfiString, ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
 };
 
 use super::{int32, parse_dtype, tensor_var};
+use types::{BlockType, BlockTypeObj};
 use crate::common::{global, serial, structural_equal};
 
 fn var(name: &str, dtype: &str) -> Var {
@@ -442,7 +443,25 @@ mod elsewhere {
     }
 }
 
-// Two blocks that fail, which `register_defined_ops` reports together while it runs the others: a
+// A type of a `register_types!` block, registered with the operators when the test binary loads.
+mod types {
+    use tvm_tirx::ir::{Type, TypeObj};
+    use tvm_tirx::tvm_ffi::{self, rs_class};
+
+    tvm_tirx::register_types! {
+        /// A type and a count.
+        #[rs_class("rust_test.BlockType", final)]
+        pub struct BlockTypeObj {
+            base: TypeObj,
+            pub elem: Type,
+            #[reflect(kw_only)]
+            pub count: i64,
+        }
+        def_object_ref!(pub BlockType, Type, BlockTypeObj);
+    }
+}
+
+// Two blocks that fail, which `register_defined_ir` reports together while it runs the others: a
 // name C++ registers, and a second custom validator, after which the block stops.
 mod failing {
     use super::*;
@@ -458,17 +477,17 @@ mod failing {
 }
 
 /// The blocks of `module` in this test binary.
-fn blocks_of(module: &str) -> Vec<&'static OpRegistration> {
+fn blocks_of(module: &str) -> Vec<&'static Registration> {
     let prefix = format!("ir::op_def{module}:");
     let of_module = |identity: &str| {
         identity
             .strip_prefix(&prefix)
             .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
     };
-    OP_REGISTRATIONS.iter().filter(|block| of_module(&block.identity())).collect()
+    REGISTRATIONS.iter().filter(|block| of_module(&block.identity())).collect()
 }
 
-fn is_block_registered(block: &OpRegistration) -> bool {
+fn is_block_registered(block: &Registration) -> bool {
     Function::get_global(&block.marker()).is_ok()
 }
 
@@ -556,9 +575,9 @@ fn register_ops_blocks_define_operators() {
     let fixed = Op::attr_map::<Type>("TFixedReturnType").unwrap().unwrap();
     assert!(structural_equal(&fixed.get(&elsewhere).unwrap().unwrap(), &PrimType::void()));
 
-    // `register_defined_ops` reports the blocks that failed together, each with its first error;
+    // `register_defined_ir` reports the blocks that failed together, each with its first error;
     // a block stops at its first failure, and a failed block does not run again.
-    let error = register_defined_ops().unwrap_err();
+    let error = register_defined_ir().unwrap_err();
     let message = error.message();
     assert!(message.starts_with("2 register_ops! blocks failed:"), "{message}");
     assert!(message.contains("op_def::failing:"), "{message}");
@@ -569,7 +588,30 @@ fn register_ops_blocks_define_operators() {
     assert!(message.contains("AttributeError: "), "{message}");
     assert!(message.contains("is registered before"), "{message}");
     assert!(Op::get("rust_test.after_broken").is_err(), "the block stopped");
-    assert_eq!(register_defined_ops().unwrap_err().message(), message);
+    assert_eq!(register_defined_ir().unwrap_err().message(), message);
+
+    // The type of a `register_types!` block is registered with them: tvm-ffi constructs it from its
+    // fields, positionally or by keyword, and reads it back from a JSON graph.
+    let init = Function::from_type_attr(BlockTypeObj::type_index(), "__ffi_init__").unwrap();
+    let kwargs = global("ffi.GetKwargsObject").call_tuple(()).unwrap();
+    let (elem, count, four) = (Type::from(PrimType::int(32)), FfiString::from("count"), 4i64);
+    let built = init
+        .call_packed(&[
+            AnyView::from(&elem),
+            AnyView::from(&kwargs),
+            AnyView::from(&count),
+            AnyView::from(&four),
+        ])
+        .unwrap();
+    let block = BlockType::try_from(built).unwrap();
+    assert!(block.elem.same_as(&elem));
+    assert_eq!(block.count, 4);
+    let positional = init.call_packed(&[AnyView::from(&elem), AnyView::from(&four)]);
+    assert!(positional.is_err_and(|error| error.kind() == TYPE_ERROR), "`count` is keyword-only");
+    let json = global("ffi.ToJSONGraph").call_packed(&[AnyView::from(&block), AnyView::new()]);
+    let read = global("ffi.FromJSONGraph").call_packed(&[AnyView::from(&json.unwrap())]);
+    let read = BlockType::try_from(read.unwrap()).unwrap();
+    assert!(!read.same_as(&block) && structural_equal(&read, &block));
 
     // A block that succeeds is marked registered for the other libraries of the process; one that
     // fails is not, so it fails in each of them.
@@ -662,7 +704,7 @@ fn a_block_another_library_registered_is_skipped() {
     }
     // One block in two libraries, as one of a crate both link.
     let text = r#"OpDef::new("rust_test.registered_once", "")"#;
-    let block = || OpRegistration::__new("ext::shared", 3, "0.1.0", text, register);
+    let block = || Registration::__new("register_ops!", "ext::shared", 3, "0.1.0", text, register);
     let (first, second) = (block(), block());
     assert_eq!(first.marker(), second.marker());
 
@@ -675,7 +717,7 @@ fn a_block_another_library_registered_is_skipped() {
     assert!(Op::get("rust_test.registered_once").unwrap().same_as(&op));
 
     // Another version of the crate is another block, whose name is already registered.
-    let other = OpRegistration::__new("ext::shared", 3, "0.2.0", text, register);
+    let other = Registration::__new("register_ops!", "ext::shared", 3, "0.2.0", text, register);
     assert!(other.register().unwrap_err().message().contains("is registered before"));
 }
 
@@ -684,7 +726,9 @@ fn register_ops_block_identity_is_its_crate_version_and_text() {
     fn register() -> Result<()> {
         Ok(())
     }
-    let identity = |version, text| OpRegistration::__new("ext::ops", 7, version, text, register);
+    let identity = |version, text| {
+        Registration::__new("register_ops!", "ext::ops", 7, version, text, register)
+    };
     let text = r#"OpDef::new("ext.clamp", "Clamp.").set_infer_type(first_arg_type)"#;
     let block = identity("0.1.0", text).identity();
     assert!(block.starts_with("ext::ops:7@0.1.0#"), "{block}");

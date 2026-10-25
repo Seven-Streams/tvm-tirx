@@ -33,9 +33,9 @@ crate-type = ["rlib", "cdylib"]
 linkme = "0.3"
 tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
 
-# A library of operators defined in Rust, which `tests/python/ir/test_op_rust.py` loads.
+# A library of operators and a type defined in Rust, which `tests/python/ir/test_op_rust.py` loads.
 [[example]]
-name = "define_ops"
+name = "define_ir"
 crate-type = ["cdylib"]
 
 # Standalone crate: not a member of any enclosing workspace.

@@ -282,9 +282,28 @@ def expose_script_op(name: str) -> Any:
     builder : Callable
         The builder the printed calls name.
     """
+    op = _ir.Op.get(name)
+    leaf, lookup, bind = _script_slot(name)
+    existing = lookup(leaf)
+    if existing is not None:
+        if not callable(existing):
+            raise ValueError(f"Op {name!r} conflicts with a non-callable Python attribute")
+        return existing
+    call = _ir.op._make_op_api(op, __name__)
+    if op.get_attr("FRegionGetBodyParams") is None:
+        call = _auto_emit_void_call(call)
+    bind(leaf, call)
+    return call
+
+
+def _script_slot(name: str):
+    """The last part of ``name``, and the lookup and binding of a name where its first parts are.
+
+    ``tirx.<path>``, ``prim.<path>`` and ``ir.<path>`` are printed as ``T.<path>``, and the first
+    part of any other name is a parser namespace. A missing namespace of the path is created.
+    """
     from tvm_tirx.script import parser  # pylint: disable=import-outside-toplevel
 
-    op = _ir.Op.get(name)
     parts = name.split(".")
     # None stands for the parser's namespaces, which hold the first part of other names.
     container = None
@@ -307,20 +326,61 @@ def expose_script_op(name: str) -> Any:
         if lookup(part) is None:
             bind(part, SimpleNamespace())
         container = lookup(part)
+    return leaf, lookup, bind
+
+
+def expose_script_type(type_key: str) -> Any:
+    """Give a registered Type the class its printed constructor names, and return it.
+
+    The printer spells a Type ``<namespace>.<Name>Type`` without a printer hook as a call of
+    ``<Name>`` in its namespace, with its fields as arguments, which is placed as
+    :func:`expose_script_op` places a builder. The class is the one registered for the type,
+    or, when the type has none or only the fallback class of an object that reached Python
+    first, a class registered now, which constructs the type through its ``__ffi_init__``. As for
+    an Op, an existing callable keeps the name, so a hand-written builder takes precedence, except
+    a class of the type, which is replaced: a hand-written class takes the name when this is called
+    after it is registered. Types of Rust ``register_types!`` blocks get their classes when they
+    are registered.
+
+    Parameters
+    ----------
+    type_key : str
+        Key of a registered Type.
+
+    Returns
+    -------
+    cls : Callable
+        The class, or the builder, the printed constructors name.
+    """
+    type_key = str(type_key)
+    info = tvm_ffi.core._lookup_or_register_type_info_from_type_key(type_key)
+    namespace, _, name = type_key.rpartition(".")
+    cls = info.type_cls
+    # The fallback class tvm_ffi makes for an object of a type without a class has no __init__.
+    if cls is None or "__init__" not in vars(cls):
+        parent = info.parent_type_info
+        base = parent.type_cls
+        if base is None or "__init__" not in vars(base):
+            base = expose_script_type(parent.type_key)
+        attrs = {"__slots__": (), "__module__": namespace}
+        cls = tvm_ffi.register_object(type_key)(type(name, (base,), attrs))
+    # The printer drops the "Type" suffix (DefaultTypeTranslate).
+    if len(name) > 4 and name.endswith("Type"):
+        name = name[:-4]
+    leaf, lookup, bind = _script_slot(f"{namespace}.{name}")
     existing = lookup(leaf)
-    if existing is not None:
+    existing_info = getattr(existing, "__tvm_ffi_type_info__", None)
+    if existing is not None and getattr(existing_info, "type_key", None) != type_key:
         if not callable(existing):
-            raise ValueError(f"Op {name!r} conflicts with a non-callable Python attribute")
+            raise ValueError(f"Type {type_key!r} conflicts with a non-callable Python attribute")
         return existing
-    call = _ir.op._make_op_api(op, __name__)
-    if op.get_attr("FRegionGetBodyParams") is None:
-        call = _auto_emit_void_call(call)
-    bind(leaf, call)
-    return call
+    bind(leaf, cls)
+    return cls
 
 
-# Rust operators call this when they are registered.
+# Rust operators and types call these when they are registered.
 tvm_ffi.register_global_func("tirx.script.expose_script_op", expose_script_op)
+tvm_ffi.register_global_func("tirx.script.expose_script_type", expose_script_type)
 
 
 abs = _auto_emit_void_call(_tir_op.abs)  # pylint: disable=redefined-builtin
@@ -897,6 +957,7 @@ __all__ = [
     "exp2",
     "exp10",
     "expose_script_op",
+    "expose_script_type",
     "fabs",
     "floor",
     "floordiv",
