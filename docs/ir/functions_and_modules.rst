@@ -28,6 +28,12 @@ an implementation while preserving references to it.
 Functions
 ---------
 
+For tensor programs, use ``@T.function`` to define functions in TVMScript,
+as in our sigmoid example. The decorator produces a
+:class:`tirx.Function <tvm_tirx.tirx.Function>` IR object. To help users better
+understand the IR, we also show how to construct the same representation
+directly through the IR API.
+
 ``ir.BaseFunc`` is the base class for all function definitions and is also
 an expression. Its ``attrs`` field holds named function properties:
 
@@ -59,12 +65,14 @@ parameters, a result type, and a statement body:
      - A ``SeqStmt``, or None for a declaration without an implementation.
 
 The parameter and result types form the function's signature, available as
-an ``ir.FuncType`` through ``ty``. The ``global_symbol`` attribute gives the
-function an exported name for code generation.
+an ``ir.FuncType`` through ``ty``. The ``global_symbol`` entry in ``attrs``
+specifies the function's exported name for code generation. For public
+functions, ``@T.function`` sets it to the Python function name by default.
+The IR API example below sets it explicitly with ``with_attr``.
 
-The program defines a function with an input matrix, a bias vector, and an
-output matrix. Its IR definition combines these three parameters with
-the batch and channel loops:
+The program defines a function with input, bias, and output tensors.
+Its IR definition combines these three parameters with the batch and
+channel loops:
 
 .. literalinclude:: examples/sigmoid.py
    :language: python
@@ -72,21 +80,23 @@ the batch and channel loops:
    :end-before: # end function construction
    :dedent: 4
 
-``batch_loop`` contains the four-channel path and scalar tail. The function
-writes activated values into ``Y``; ``ir.TupleType([])`` declares that it
-returns no value.
-
-The input and output types have shape ``(2*n, channels)``. The symbol ``n``
-is used in these types and the loop bound; it is not a separate parameter.
-The compiled function derives its value from the tensor shapes at runtime.
+``batch_loop`` contains a channel loop that processes one element at a time.
+The function writes activated values into ``Y``; ``ir.TupleType([])`` declares
+that it returns no value.
+The input and output types have shape ``(2*n, channels)``. The symbol ``n``,
+whose value the compiled function derives from the tensor shapes at runtime,
+is used in these types and the loop bound.
 
 Modules
 -------
 
-:class:`ir.IRModule <tvm_tirx.ir.IRModule>` maps ``ir.GlobalVar`` references to
-``ir.BaseFunc`` definitions. An ``ir.GlobalVar`` identifies a function within
-the module. Its definition can be replaced while that reference stays valid,
-so callers do not need to change when a pass updates the implementation.
+:class:`ir.IRModule <tvm_tirx.ir.IRModule>` organizes named functions into a
+program and lets us look up their definitions. An
+:class:`ir.GlobalVar <tvm_tirx.ir.GlobalVar>` is an expression that refers to a
+function stored in the module. This differs from the :ref:`ir.Var <user-ir-var>`
+objects used for parameters and local values in our example. The module
+associates each function reference with its ``ir.BaseFunc`` definition, such
+as a ``tirx.Function``.
 
 In the bias + sigmoid example, one module keeps two model specializations.
 The same factory builds kernels for 128-channel and 130-channel outputs,
@@ -97,20 +107,23 @@ each with its own exported name:
    :start-after: # begin module construction
    :end-before: # end module construction
 
-Both accept tensors with a runtime row count of ``2*n``. The 128-channel
-specialization processes complete four-element groups; the 130-channel
-specialization also handles two residual channels. Their tensor types record
-the different widths.
+Both accept tensors with a runtime row count of ``2*n``. Each specialization
+uses a scalar loop over its channels. Their tensor types record the different
+widths.
 
-The module provides a global reference for each specialization:
+Use ``module.get_global_var(name)`` to retrieve the ``ir.GlobalVar`` reference
+for an existing function:
 
 .. literalinclude:: examples/sigmoid.py
    :language: python
    :start-after: # begin module lookup
    :end-before: # end module lookup
 
-``entry`` identifies the function; ``module[entry]`` and
-``module["bias_sigmoid_130"]`` retrieve its current definition.
+``entry`` is the function's ``ir.GlobalVar`` reference; ``module[entry]`` and
+``module["bias_sigmoid_130"]`` retrieve its current definition. A compiler pass
+can replace that definition while keeping ``entry``. If the replacement
+preserves the function's calling interface, calls using this reference can
+remain unchanged.
 
 For example, a compiler can keep the original expanded sigmoid and build
 another module that uses the named ``prim.sigmoid`` operator. The factory's

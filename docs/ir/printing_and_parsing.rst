@@ -33,7 +33,7 @@ file; the numerical computation runs when the compiled function is called.
 
 The example program defines ``bias_sigmoid`` inside a Python factory:
 
-.. literalinclude:: ../get_started/examples/program.py
+.. literalinclude:: examples/tvmscript_sigmoid.py
    :language: python
    :start-at: from __future__ import annotations
    :end-at:     return bias_sigmoid
@@ -42,19 +42,8 @@ The factory creates ``n`` with ``T.dynamic`` before the function definition
 and reuses it in the tensor shapes and loop bound. The decorated definition
 records the loops, arithmetic, and indexing as IR.
 
-A Python factory can generate IR for different configurations, a form of
-metaprogramming. The same bias + sigmoid definition can therefore produce
-separate kernels for different channel counts:
-
-.. literalinclude:: examples/sigmoid.py
-   :language: python
-   :start-after: # begin module construction
-   :end-before: # end module construction
-
-``channels`` is chosen while the factory runs. The resulting functions have
-128-channel or 130-channel tensor types and loop bounds, while the row count
-``2*n`` remains symbolic. The latter specialization needs a two-element
-scalar tail.
+For printing and parsing, we reuse ``module`` from
+:doc:`functions_and_modules`.
 
 The ``script()`` method returns TVMScript source for an IR object, so
 generated loops and expressions can be inspected before lowering. The
@@ -66,21 +55,17 @@ generated loops and expressions can be inspected before lowering. The
    source = function.script()
    print(source)
 
-The printed loop structure exposes the vector access guard and scalar
-fallback:
+The printed loop structure shows the iteration over samples and channels:
 
 .. code-block:: text
 
-   for j in range(T.int64(0), T.int64(130), T.int64(4)):
-       if j + T.int64(4) <= T.int64(130):
+   for i in range(T.int64(0), T.int64(2) * n):
+       for j in range(T.int64(0), T.int64(130)):
            ...
-       else:
-           for k in range(j, T.int64(130)):
-               ...
 
-The full source includes the biased values, sigmoid expressions, and output
-stores. It declares ``n`` with ``T.dynamic`` so the tensor shapes and outer
-loop share the same symbol when parsed again.
+The full source includes the bias addition, sigmoid expression, and output
+store. It keeps ``n`` symbolic so the tensor shapes and outer loop share
+the same symbol when parsed again.
 
 Smaller objects can be inspected too. ``function.params[0].ty.script()``
 prints the input tensor type. ``function.show()`` displays highlighted source.

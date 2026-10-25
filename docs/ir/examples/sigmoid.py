@@ -20,8 +20,7 @@ TIRx needs LLVM support. The example runs from the repository root with:
     uv run --no-sync python docs/ir/examples/sigmoid.py
 
 X and Y have shape (2*n, channels); bias has one value per channel.
-The code built by make_bias_sigmoid processes four channels at a time,
-using a scalar loop for any tail.
+The code built by make_bias_sigmoid processes one element at a time.
 It writes Y[i, j] = sigmoid(X[i, j] + bias[j]) without an intermediate tensor.
 The symbol n is derived from tensor shapes at runtime.
 Channels selects a model specialization.
@@ -46,23 +45,14 @@ def sigmoid(x):
 
 # end sigmoid expression
 
-
-# begin call construction
-def intrinsic_sigmoid(x):
-    return ir.Call(ir.Op.get("prim.sigmoid"), [x])
-
-
-# end call construction
-
 # begin primitive types
 index_type = ir.PrimType("int64")
 element_type = ir.PrimType("float32")
-packed_type = ir.PrimType("float32x4")
 # end primitive types
 
 
 def make_bias_sigmoid(channels=128, activation=sigmoid):
-    """The factory builds vector accesses and a bounds-checked scalar tail."""
+    """The factory builds scalar computations inside batch and channel loops."""
     # begin tensor types
     n = ir.Var("n", "int64")
     matrix_type = tirx.TensorType((2 * n, channels), "float32")
@@ -73,55 +63,29 @@ def make_bias_sigmoid(channels=128, activation=sigmoid):
     X = ir.Var("X", matrix_type)
     bias = ir.Var("bias", bias_type)
     Y = ir.Var("Y", matrix_type)
-    i, j, k = [ir.Var(name, "int64") for name in ("i", "j", "k")]
-    packed_value = ir.Var("biased", "float32x4")
-    scalar_value = ir.Var("activated_tail", "float32")
+    i, j = [ir.Var(name, "int64") for name in ("i", "j")]
+    biased = ir.Var("biased", "float32")
     # end variables
 
-    zero, step, four = [ir.const(value, index_type) for value in (0, 1, 4)]
+    zero, step = [ir.const(value, index_type) for value in (0, 1)]
     end = ir.const(channels, index_type)
 
-    # begin vector expressions
-    indices = ir.prim.Ramp(j, step, 4)
-    input_values = X[i, indices]
-    bias_values = bias[indices]
-    # end vector expressions
-
-    # begin primitive arithmetic
-    biased_values = input_values + bias_values
-    full_vector = j + four <= end
-    # end primitive arithmetic
+    # begin biased activation
+    biased_value = X[i, j] + bias[j]
+    result = activation(biased)
+    # end biased activation
 
     # begin statement sequence
-    vector_body = ir.SeqStmt(
+    body = ir.SeqStmt(
         [
-            ir.Bind(packed_value, biased_values),
-            ir.TensorStore(Y, [i, indices], activation(packed_value)),
+            ir.Bind(biased, biased_value),
+            ir.TensorStore(Y, [i, j], result),
         ]
     )
     # end statement sequence
 
-    # begin biased activation
-    biased_value = X[i, k] + bias[k]
-    result = activation(biased_value)
-    # end biased activation
-
-    # begin scalar tail
-    tail_body = ir.SeqStmt(
-        [
-            ir.Bind(scalar_value, result),
-            ir.TensorStore(Y, [i, k], scalar_value),
-        ]
-    )
-    tail_loop = ir.For(k, j, end, step, ir.ForKind.DEFAULT, tail_body)
-    # end scalar tail
-
-    # begin branch
-    branch = ir.If(full_vector, vector_body, tail_loop)
-    # end branch
-
     # begin loop
-    channel_loop = ir.For(j, zero, end, four, ir.ForKind.DEFAULT, branch)
+    channel_loop = ir.For(j, zero, end, step, ir.ForKind.DEFAULT, body)
     batch_loop = ir.For(i, zero, 2 * n, step, ir.ForKind.DEFAULT, channel_loop)
     # end loop
 
@@ -133,9 +97,9 @@ def make_bias_sigmoid(channels=128, activation=sigmoid):
 
 
 # begin module construction
-aligned = make_bias_sigmoid(128).with_attr("global_symbol", "bias_sigmoid_128")
-with_tail = make_bias_sigmoid(130).with_attr("global_symbol", "bias_sigmoid_130")
-module = ir.IRModule({"bias_sigmoid_128": aligned, "bias_sigmoid_130": with_tail})
+channels_128 = make_bias_sigmoid(128).with_attr("global_symbol", "bias_sigmoid_128")
+channels_130 = make_bias_sigmoid(130).with_attr("global_symbol", "bias_sigmoid_130")
+module = ir.IRModule({"bias_sigmoid_128": channels_128, "bias_sigmoid_130": channels_130})
 # end module construction
 
 # begin module lookup
@@ -145,8 +109,7 @@ function = module[entry]
 
 batch_loop = function.body[0]
 channel_loop = batch_loop.body[0]
-branch = channel_loop.body[0]
-binding, store = branch.then_case.seq
+binding, store = channel_loop.body.seq
 activation = store.value
 exp_call = activation.b.b
 
@@ -157,7 +120,7 @@ effect = op.get_attr("TCallEffectKind")
 # end operator lookup
 
 # begin validation failure
-invalid = ir.Call(op, [], ty=exp_call.ty)
+invalid = ir.Call("prim.exp", [], ty="float32")
 # end validation failure
 try:
     invalid.validate()
@@ -176,7 +139,7 @@ rebuilt_call.validate()
 
 # begin module update
 variant = module.clone()
-replacement = make_bias_sigmoid(130, activation=intrinsic_sigmoid)
+replacement = make_bias_sigmoid(130, activation=ir.prim.sigmoid)
 variant[entry] = replacement.with_attr("global_symbol", "bias_sigmoid_130")
 # end module update
 
@@ -216,9 +179,9 @@ def run():
 
     assert tirx.analysis.check_well_formed(module)
     assert tirx.analysis.check_well_formed(variant)
-    assert inferred == packed_type
+    assert inferred == element_type
     ir.assert_structural_equal(exp_call, rebuilt_call)
-    assert module[entry].same_as(with_tail)
+    assert module[entry].same_as(channels_130)
 
     with TemporaryDirectory() as directory:
         cached = save_program(variant, Path(directory) / "activation.py")

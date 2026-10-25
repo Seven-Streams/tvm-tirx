@@ -17,12 +17,11 @@
 """This example defines, compiles, and runs a bias + sigmoid program in TVMScript.
 
 TIRx needs LLVM support. The example runs from the repository root with:
-    uv run --no-sync python docs/get_started/examples/program.py
+    uv run --no-sync python docs/ir/examples/tvmscript_sigmoid.py
 
 X and Y have shape (2*n, channels); bias has one value per channel.
-The code in bias_sigmoid processes four channels at a time and handles any
-remaining channels with a scalar loop. run() compiles a 130-channel
-specialization and compares the output against NumPy.
+The code in bias_sigmoid processes one element at a time. run() compiles a
+130-channel specialization and compares the output against NumPy.
 """
 
 # begin program
@@ -42,18 +41,9 @@ def make_bias_sigmoid(channels=130):
         Y: T.Tensor((2 * n, channels), T.float32),
     ):
         for i in range(2 * n):
-            for j in range(T.int64(0), T.int64(channels), T.int64(4)):
-                if j + T.int64(4) <= T.int64(channels):
-                    biased: T.let[T.float32x4] = (
-                        X[i, T.Ramp(j, T.int64(1), 4)] + bias[T.Ramp(j, T.int64(1), 4)]
-                    )
-                    Y[i, j : j + T.int64(4)] = T.float32(1) / (T.float32(1) + T.exp(-biased))
-                else:
-                    for k in range(j, T.int64(channels)):
-                        activated_tail: T.let[T.float32] = T.float32(1) / (
-                            T.float32(1) + T.exp(-(X[i, k] + bias[k]))
-                        )
-                        Y[i, k] = activated_tail
+            for j in range(T.int64(channels)):
+                biased = X[i, j] + bias[j]
+                Y[i, j] = T.float32(1) / (T.float32(1) + T.exp(-biased))
 
     return bias_sigmoid
 
@@ -67,10 +57,10 @@ def run():
     from tvm_tirx import runtime
 
     function = program["bias_sigmoid"]
-    input_var = function.params[0]
-    tensor_type = input_var.ty
-    row_extent = tensor_type.shape[0]
-    location = row_extent.loc
+    input_var = function.params[0]  # ir.Var named X.
+    tensor_type = input_var.ty  # tirx.TensorType: shape=(2 * n, 130), dtype=float32.
+    row_extent = tensor_type.shape[0]  # ir.prim.Mul: a=2, b=n, ty=ir.PrimType("int64").
+    location = row_extent.loc  # Source location of 2 * n in X's type annotation.
     print("Input type:", tensor_type.script())
     print("Rows:", row_extent.script())
     print("Rows source:", location.source_name.name)
@@ -89,7 +79,7 @@ def run():
 
     expected = 1.0 / (1.0 + np.exp(-(inputs + offsets)))
     np.testing.assert_allclose(output.numpy(), expected, rtol=1e-6, atol=1e-7)
-    print("bias + sigmoid: vector and tail paths match NumPy.")
+    print("bias + sigmoid matches NumPy.")
 
 
 if __name__ == "__main__":

@@ -18,19 +18,57 @@
 IR Overview
 ===========
 
-An intermediate representation (IR) describes a program in a form that compiler
-components can inspect and transform. It makes values, computations, control
-flow, and types explicit, allowing analyses and transformations to work with the
-program's structure independently of the syntax used to construct it.
+In :doc:`/get_started/example`, we wrote and ran our first TIRx program. To
+improve efficiency, we need to convert the program into a common intermediate
+representation (IR) and apply compiler passes to it. In this section, we'll
+explore the IR system in tvm-tirx in detail.
+
+The main components of TIRx IR are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 30 30
+
+   * - Component
+     - Main classes
+     - Purpose
+     - Example
+   * - Expressions
+     - ``ir.Expr``
+     - Represent values and computations.
+     - ``A[i] + 1``
+   * - Statements
+     - ``ir.Stmt``
+     - Describe execution order and control flow.
+     - ``B[i] = A[i] + 1``
+   * - Types
+     - ``ir.Type``
+     - Describe value properties, such as dtypes and tensor shapes.
+     - ``T.float32``
+   * - Functions
+     - ``ir.BaseFunc``, ``tirx.Function``
+     - Define parameters and a computation body.
+     - ``add_one`` defined with ``@T.function``.
+   * - Modules
+     - ``ir.IRModule``
+     - Organize named functions into a program.
+     - ``ir.IRModule({"add_one": add_one})``
+   * - Source locations
+     - ``ir.Location``
+     - Record where IR nodes originate in the source.
+     - The filename and line number of ``A[i] + 1``.
+
+The IR makes values, computations, control flow, and types explicit, allowing
+analyses and transformations to work with the program's structure independently
+of the syntax used to construct it.
 
 TIRx's C++, Python, and Rust interfaces share a common IR object system through
 TVM FFI, allowing compiler components written in different languages to work
-together. The IR can be extended with custom operators and types, and its
-existing interfaces can be used to build custom analyses, transformation passes,
-and backends.
+together. Built on shared C++ IR infrastructure, the IR can be extended with
+custom operators and types, and its existing interfaces can be used to build
+custom analyses, transformation passes, and backends.
 
-The following tree shows the inheritance of the core classes for expressions,
-types, statements, source locations, and modules.
+The following tree shows the detailed inheritance hierarchy of the core IR classes.
 
 .. code-block:: text
 
@@ -122,8 +160,11 @@ types, statements, source locations, and modules.
 What to Read Next
 -----------------
 
-We will use the program from :doc:`/get_started/example`
-throughout this IR Walkthrough.
+After the add-one example in :doc:`/get_started/example`, this walkthrough
+uses a bias + sigmoid program to introduce symbolic shapes and scalar computations.
+It computes ``Y[i, j] = 1 / (1 + exp(-(X[i, j] + bias[j])))``.
+Download :download:`tvmscript_sigmoid.py <examples/tvmscript_sigmoid.py>`
+and run ``python tvmscript_sigmoid.py`` with an LLVM-enabled TIRx build.
 
 * The :doc:`types_and_expressions` chapter explains how values, computations,
   and tensor shapes are represented.

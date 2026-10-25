@@ -18,30 +18,42 @@
 Your First TIRx Program
 =======================
 
-In this chapter, we'll write and run a small TIRx program, then look at the
-IR it builds. Our example adds a bias to each channel and applies sigmoid,
-a common activation in neural networks. For each input element, we'll compute
-``Y[i, j] = 1 / (1 + exp(-(X[i, j] + bias[j])))``.
+In this chapter, we'll write and run a small TIRx program using TVMScript,
+TIRx's Python-based notation for IR, then look at the IR it builds. Our example
+adds one to each element of a tensor: ``B[i] = A[i] + 1``.
 
-Each row of ``X`` is a sample, and each column is a channel. The same bias
-vector is shared across all rows. We can compute the addition and sigmoid
-in one kernel, so there's no need to store the biased values in a separate
-tensor.
-
-We'll use TVMScript, TIRx's Python-based notation for IR. On the first read,
-you can follow the data from ``X`` and ``bias`` through ``biased`` to ``Y``.
+``A`` is the input tensor, and ``B`` stores the result. Both tensors have the
+same dynamic length ``n``. We can call the compiled program with different
+lengths without recompiling.
 
 With an LLVM-enabled TIRx build, you can download
-:download:`program.py <examples/program.py>` and run ``python program.py``.
+:download:`add_one_cpu.py <examples/add_one_cpu.py>` and run ``python add_one_cpu.py``.
 Here's the complete program:
 
-.. literalinclude:: examples/program.py
+.. literalinclude:: examples/add_one_cpu.py
    :language: python
    :start-after: # begin program
    :end-before: # end program
 
-Here, ``@T.function`` turns the bias + sigmoid definition into IR. The code
-in ``bias_sigmoid`` processes four channels at a time and uses a scalar loop
-for the remaining channels. ``run()`` compiles it for the CPU and checks its
-output against NumPy. We'll revisit parts of this program in the
-:doc:`IR Walkthrough </ir/overview>` to explain the IR objects behind them.
+Here, ``@T.function`` turns the ``add_one`` definition into IR. The code
+in ``add_one`` loops over the input and writes each result to ``B``.
+``tirx.compile`` compiles it for the CPU, and the NumPy assertion checks
+its output. We'll explore the IR objects behind these constructs in the
+:doc:`IR Walkthrough </ir/overview>`.
+
+We can also run this computation on an NVIDIA GPU. In addition to LLVM,
+this example needs CUDA support, an NVIDIA driver, the CUDA toolkit, and
+``cuda-bindings``. You can download
+:download:`add_one_cuda.py <examples/add_one_cuda.py>` and run ``python add_one_cuda.py``.
+Here's the complete GPU program:
+
+.. literalinclude:: examples/add_one_cuda.py
+   :language: python
+   :start-after: # begin program
+   :end-before: # end program
+
+Here, ``T.device_entry`` marks the GPU computation. Each thread handles one
+element, and the launch uses enough blocks of 256 threads to cover ``n``
+elements. The ``if i < n`` check skips any extra threads. ``tirx.compile``
+compiles it for CUDA, and ``cuda(0)`` selects the GPU for the input and output
+tensors. The NumPy assertion checks the result in the same way as the CPU example.
