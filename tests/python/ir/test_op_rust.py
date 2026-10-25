@@ -18,7 +18,7 @@
 
 ``rust/examples/define_ops.rs`` is built by cargo and loaded by a fresh interpreter, as
 ``import tvm_tirx`` loads libtvm_tirx_rust, which then uses its operators as it uses C++ ones:
-their TVMScript builders are Python functions written for them.
+registering them also gives them their TVMScript builders.
 """
 
 import os
@@ -113,8 +113,6 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
         import tvm_tirx
         from tvm_tirx import ir
         from tvm_tirx.script import tirx as T
-        from tvm_tirx.script.ir_builder.base import auto_emit_void_call
-        from tvm_tirx.tirx.script import ir_builder
 
         # Registered by the library, with the doc comment and signature the Rust definition gives.
         tvm_ffi.load_module(sys.argv[1]).tirx_register_ops()
@@ -123,7 +121,7 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
         assert [arg.name for arg in clamp.args_info] == ["index", "bound"]
         mark = ir.Op.get("tirx.example_mark")
         assert mark.doc.startswith("Mark a point in the program.\\n\\nThe call has no value")
-        hint = ir.Op.get("tirx.example_hint")
+        hint = ir.Op.get("my_ext.hint")
         loop = ir.Op.get("tirx.example_loop")
 
         # A Call built in Python runs the Rust type inference and validator.
@@ -138,23 +136,14 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
         else:
             raise AssertionError("a float bound passed validation")
 
-        # The TVMScript builders, written in Python as those of the C++ operators are in
-        # `tirx/script/ir_builder/op.py`, under the names the printer gives the calls.
-        def example_clamp(index, bound):
-            return ir.Call(clamp, [index, bound])
+        # Registration gave each its TVMScript builder, generated from its signature under the name
+        # the printer gives its calls.
+        assert T.example_clamp.__doc__ == clamp.doc
+        assert T.example_loop.__doc__ == loop.doc
+        # Outside `tirx.`, in the parser namespace its root names.
+        from tvm_tirx.script.parser import my_ext
 
-        @auto_emit_void_call
-        def example_mark():
-            return ir.Call(mark, [])
-
-        def example_hint(value, attrs=None):
-            return ir.Call(hint, [value], attrs=attrs)
-
-        def example_loop(extent):
-            return T.region(loop, [extent])
-
-        for builder in (example_clamp, example_mark, example_hint, example_loop):
-            setattr(ir_builder, builder.__name__, builder)
+        assert my_ext.hint.__doc__ == hint.doc
 
         # With them, TVMScript writes, prints and parses the calls as it does those of C++
         # operators: a call with a value, a call emitted as a statement, `Call.attrs`, and a region,
@@ -163,14 +152,14 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
         def func(i: T.int32, n: T.int32):
             T.evaluate(T.example_clamp(i + 1, n))
             T.example_mark()
-            T.evaluate(T.example_hint(i, attrs={"note": "hot"}))
+            T.evaluate(my_ext.hint(i, attrs={"note": "hot"}))
             with T.example_loop(n) as j:
                 T.evaluate(T.example_clamp(j, n))
 
         text = func.script()
         assert "T.example_clamp(i + 1, n)" in text, text
         assert "T.example_mark()" in text, text
-        assert 'T.example_hint(i, attrs={"note": "hot"})' in text, text
+        assert 'my_ext.hint(i, attrs={"note": "hot"})' in text, text
         assert "with T.example_loop(n) as j:" in text, text
         parsed = tvm_tirx.script.parse(text, extra_vars={"T": T})
         assert tvm_ffi.structural_equal(parsed, func), parsed.script()

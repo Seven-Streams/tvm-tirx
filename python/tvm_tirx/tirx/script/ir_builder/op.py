@@ -18,7 +18,11 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from typing import Any
+
+import tvm_ffi
 
 from tvm_tirx import ir
 from tvm_tirx import ir as _ir
@@ -256,6 +260,67 @@ def register_script_namespace(name: str, namespace: object) -> object:
             module_all.append(name)
 
     return namespace
+
+
+def expose_script_op(name: str) -> Any:
+    """Give a registered Op the TVMScript builder its printed calls name, and return it.
+
+    The printer spells a call to ``tirx.<path>``, ``prim.<path>`` or ``ir.<path>`` as
+    ``T.<path>``, and a call to any other Op by its name, whose first part is then a
+    parser namespace. The builder is generated from the Op's registration, as backend
+    builders are, and a missing namespace of its path is created. An existing callable
+    keeps the name, so a hand-written builder takes precedence. Operators of Rust
+    ``register_ops!`` blocks get their builders when they are registered.
+
+    Parameters
+    ----------
+    name : str
+        Name of a registered Op.
+
+    Returns
+    -------
+    builder : Callable
+        The builder the printed calls name.
+    """
+    from tvm_tirx.script import parser  # pylint: disable=import-outside-toplevel
+
+    op = _ir.Op.get(name)
+    parts = name.split(".")
+    # None stands for the parser's namespaces, which hold the first part of other names.
+    container = None
+    if parts[0] in ("tirx", "prim", "ir"):
+        container, parts = sys.modules["tvm_tirx.tirx.script.ir_builder"], parts[1:]
+
+    def lookup(part):
+        if container is None:
+            return parser._NAMESPACES.get(part)
+        return getattr(container, part, None)
+
+    def bind(part, value):
+        if container is None:
+            parser.register_namespace(part, value)
+        else:
+            setattr(container, part, value)
+
+    *namespaces, leaf = parts
+    for part in namespaces:
+        if lookup(part) is None:
+            bind(part, SimpleNamespace())
+        container = lookup(part)
+    existing = lookup(leaf)
+    if existing is not None:
+        if not callable(existing):
+            raise ValueError(f"Op {name!r} conflicts with a non-callable Python attribute")
+        return existing
+    call = _ir.op._make_op_api(op, __name__)
+    if op.get_attr("FRegionGetBodyParams") is None:
+        call = _auto_emit_void_call(call)
+    bind(leaf, call)
+    return call
+
+
+# Rust operators call this when they are registered.
+tvm_ffi.register_global_func("tirx.script.expose_script_op", expose_script_op)
 
 
 abs = _auto_emit_void_call(_tir_op.abs)  # pylint: disable=redefined-builtin
@@ -831,6 +896,7 @@ __all__ = [
     "exp",
     "exp2",
     "exp10",
+    "expose_script_op",
     "fabs",
     "floor",
     "floordiv",

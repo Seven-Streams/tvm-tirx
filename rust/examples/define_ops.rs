@@ -22,9 +22,8 @@
 //! `cargo build --example define_ops` builds this as `target/debug/examples/libdefine_ops.so`,
 //! which exports `tirx_register_ops`, as every library built on `tvm_tirx` does.
 //! `tests/python/ir/test_op_rust.py` loads it and calls `tirx_register_ops`, as `import tvm_tirx`
-//! does for `libtvm_tirx_rust`, which registers these operators. As a C++ operator
-//! does, each has its TVMScript builder written in Python, which the test writes:
-//! `T.example_clamp(i, n)`, `T.example_mark()`, `T.example_hint(i, attrs={..})` and
+//! does for `libtvm_tirx_rust`, which registers these operators and gives each its TVMScript
+//! builder: `T.example_clamp(i, n)`, `T.example_mark()`, `my_ext.hint(i, attrs={..})` and
 //! `with T.example_loop(n) as j:`.
 
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
@@ -51,8 +50,8 @@ tvm_tirx::register_ops! {
         .set_infer_type(first_arg_type)
         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
 
-    // `Call.attrs` holds a `DictAttrs`.
-    OpDef::new("tirx.example_hint", "Return the value, with hints for the code generator.")
+    // `Call.attrs` holds a `DictAttrs`; outside `tirx.`, the calls print as `my_ext.hint(..)`.
+    OpDef::new("my_ext.hint", "Return the value, with hints for the code generator.")
         .signature((sig::arg::<Expr>("value", "The value."), sig::call_attrs::<DictAttrs>()))
         .set_infer_type(first_arg_type)
         .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation);

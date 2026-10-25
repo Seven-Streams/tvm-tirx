@@ -93,9 +93,14 @@ impl OpDef {
         Self(registered.and_then(|_| Op::get(name)))
     }
 
-    /// The operator, or the error of the step that failed.
+    /// The operator, or the error of the step that failed. Once Python has imported `tvm_tirx`,
+    /// this also gives the operator its TVMScript builder (`tirx.script.expose_script_op`).
     pub fn op(self) -> Result<Op> {
-        self.0
+        let op = self.0?;
+        if let Ok(expose) = tvm_ffi::Function::get_global("tirx.script.expose_script_op") {
+            expose.call_tuple((op.name.clone(),))?;
+        }
+        Ok(op)
     }
 
     /// C++ `OpDef::signature`: replace the argument descriptions and the attrs type, and the
