@@ -29,9 +29,8 @@ together. The IR can be extended with custom operators and types, and its
 existing interfaces can be used to build custom analyses, transformation passes,
 and backends.
 
-The following tree shows the inheritance relationships between IR object types.
-Registered names can differ from Python API names. For example, ``prim.Add``
-is available as ``ir.prim.Add`` in Python.
+The following tree shows the inheritance of the core classes for expressions,
+types, statements, source locations, and modules.
 
 .. code-block:: text
 
@@ -85,13 +84,7 @@ is available as ``ir.prim.Add`` in Python.
    │   ├── prim.Let                                    Expression-local binding
    │   ├── prim.Ramp                                   Vector arithmetic progression
    │   ├── prim.Broadcast                              Scalar broadcast to vector lanes
-   │   ├── prim.Shuffle                                Vector lane selection
-   │   ├── sym.IterMapExpr                             Iterator mapping expressions
-   │   │   ├── sym.IterSplitExpr                       Iterator splitting
-   │   │   └── sym.IterSumExpr                         Sums of iterator expressions
-   │   └── sym.CanonicalExpr                           Internal simplifier expressions
-   │       ├── sym.SplitExpr                           Internal split expressions
-   │       └── sym.SumExpr                             Internal sum expressions
+   │   └── prim.Shuffle                                Vector lane selection
    ├── ir.Type                                         Types
    │   ├── ir.MissingType                              Unresolved type information
    │   ├── ir.NoneType                                 The type of None
@@ -118,49 +111,27 @@ is available as ``ir.prim.Add`` in Python.
    │   ├── ir.Return                                   Function returns
    │   ├── ir.Break                                    Loop exits
    │   └── ir.Continue                                 Next loop iterations
-   ├── ir.IRModule                                     Global function definitions
-   ├── ir.Attrs                                        Structured attributes
-   │   ├── ir.DictAttrs                                Named attribute maps
-   │   ├── tirx.CallFFIKernelAttr                       FFI kernel call attributes
-   │   ├── tirx.tensor.ScopeAttrs                      Tensor instruction scopes
-   │   ├── tirx.tensor.TrnAttrs                        Tensor instruction attributes
-   │   ├── tirx.cuda.TensorMapEncodeTiledAttr           CUDA tensor map encoding attributes
-   │   ├── tirx.cuda.TCGen05InstrDescriptorAttrs         CUDA instruction descriptors
-   │   └── tirx.cuda.TCGen05InstrDescriptorBlockScaledAttrs  Block-scaled CUDA descriptors
    ├── ir.Location                                     Source locations
    │   ├── ir.UnknownLoc                               Unavailable source information
    │   ├── ir.SourceLoc                                Source ranges
    │   └── ir.CallSiteLoc                              Callee and caller locations
-   ├── ir.SourceName                                   Source identifiers
-   ├── ir.Range                                        Begin and end bounds
-   ├── ir.ArgumentInfo                                 Operator argument descriptions
-   ├── ir.GlobalInfo                                   Module-level metadata
-   ├── ir.EnvFunc                                      Named global function references
-   ├── ir.UniqueNameSupply                             Unique-name generation
-   ├── tirx.Layout                                     Index-to-axis mappings
-   │   ├── tirx.TileLayout                             Tile layouts
-   │   └── tirx.ComposeLayout                          Composed layouts
-   ├── tirx.Iter                                       Layout iterators
-   ├── tirx.IndexMap                                   Index transformations
-   ├── sym.IterMark                                    Iterator source and extent
-   └── ffi.Enum                                        Registered enumeration objects
-       ├── tirx.Axis                                   Layout axis identities
-       └── tirx.ThreadScope                            Execution scope identities
+   └── ir.IRModule                                     Global function definitions
 
 .. _choose-a-chapter:
 
 What to Read Next
 -----------------
 
-The following chapters explain how to work with each part of the IR:
+We will use the program from :doc:`/get_started/example`
+throughout this IR Walkthrough.
 
-* To understand how values, computations, and tensor shapes are represented,
-  see :doc:`types_and_expressions`.
-* To build statement bodies with bindings, tensor writes, branches, and loops,
-  see :doc:`statements`.
-* To work with registered operators and function calls, see
-  :doc:`operators_and_calls`.
-* To define functions and organize them into modules, see
-  :doc:`functions_and_modules`.
-* To write or generate TVMScript and print or parse IR, see
-  :doc:`printing_and_parsing`.
+* The :doc:`types_and_expressions` chapter explains how values, computations,
+  and tensor shapes are represented.
+* The :doc:`statements` chapter covers statement bodies with bindings, tensor
+  writes, branches, and loops.
+* The :doc:`operators_and_calls` chapter introduces registered operators and
+  function calls.
+* The :doc:`functions_and_modules` chapter shows how functions are defined
+  and organized in modules.
+* The :doc:`printing_and_parsing` chapter covers TVMScript definitions,
+  program generation, and conversion between source text and IR.

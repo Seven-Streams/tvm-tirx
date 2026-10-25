@@ -20,33 +20,20 @@
 Statements
 ==========
 
-Statements describe variable bindings, tensor writes, and control flow.
-Extensions can construct and rewrite program bodies with the existing
-statement nodes. Custom operators can use ``ir.RegionStmt`` to define how
-a group of statements executes.
+In this chapter, we will introduce the statement nodes that organize a
+function's execution. Statements describe value bindings, tensor writes,
+and control flow. Statement sequences record execution order, while branches
+and loops combine statements into program bodies. Compiler passes can use
+these structures to construct and transform programs, including bodies
+defined by custom operators.
 
 .. _statements-and-sequences:
 
 Statement Nodes
 ---------------
 
-``ir.Stmt`` is the base class for all statement nodes, including sequences,
-branches, and loops. It defines the following field:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 15 25 60
-
-   * - Field
-     - Value type
-     - Meaning
-   * - ``loc``
-     - ``ir.Location``
-     - Source information for diagnostics. Defaults to ``UnknownLoc`` and does
-       not affect structural comparison.
-
-Subclasses inherit ``loc`` and add fields for operands or nested statements.
-The shared statement classes are:
+``ir.Stmt`` is the base class for all statements, from bindings and tensor
+writes to sequences, branches, and loops:
 
 .. list-table::
    :header-rows: 1
@@ -54,7 +41,7 @@ The shared statement classes are:
 
    * - Class
      - Represents
-     - Additional fields
+     - Fields
    * - ``ir.Bind``
      - A variable definition
      - ``var``, ``value``
@@ -95,33 +82,26 @@ The shared statement classes are:
 Statement Sequences
 -------------------
 
-A return that uses a bound variable must follow its definition.
-``ir.SeqStmt`` records the execution order of such statements.
-For example, consider a function that adds one to its input:
+``ir.SeqStmt`` groups statements in execution order in its ``seq`` field.
+A sequence can serve as a function body or as the body of a branch or loop.
+It introduces no scope of its own.
 
-.. code-block:: python
+In the program's four-channel path, a binding makes the biased values
+available to the following output store:
 
-   def increment(x):
-       result = x + 1
-       return result
-
-The following code constructs that function body as IR objects:
-
-.. literalinclude:: examples/statements_and_functions.py
+.. literalinclude:: examples/sigmoid.py
    :language: python
-   :start-after: # begin statements
-   :end-before: # end statements
-   :prepend: from tvm_tirx import ir, tirx
+   :start-after: # begin statement sequence
+   :end-before: # end statement sequence
+   :dedent: 4
 
-The Python variable ``added`` holds the expression for ``x + 1``. ``ir.Var``
-creates the IR variable ``result``, and ``ir.Bind(result, added)`` defines it
-with that expression as its value. ``added.ty`` gives ``result`` the addition's
-``int32`` type. ``ir.Return(result)`` refers to the same variable, and
-``SeqStmt`` places the definition before the return.
+``biased_values`` is the expression ``X[i, indices] + bias[indices]``.
+``ir.Bind`` defines the four-lane variable ``packed_value`` with that value.
+The following ``TensorStore`` applies the activation and writes four elements
+to ``Y``. Both the bound variable and its value have type ``float32x4``.
 
-Nested sequences are flattened, and a sequence introduces no scope of its
-own. Variables defined by ``Bind`` are available to subsequent statements in
-the enclosing scope.
+The sequence belongs to the vector branch, which determines the binding's
+scope.
 
 Control Flow and Scope
 ----------------------
@@ -135,56 +115,62 @@ stored in ``If.then_case`` and ``If.else_case``, while loop bodies are stored
 in ``For.body`` and ``While.body``. Each body is a ``SeqStmt`` and can contain
 further branches and loops.
 
-For example, this branch returns the incremented value only for positive
-inputs. Both bodies are normalized to ``SeqStmt``:
+An ``ir.For`` specifies a loop variable, begin and end bounds, a step, and an
+execution kind. The end bound is exclusive. ``ForKind.DEFAULT`` executes
+iterations in order; the :class:`~tvm_tirx.ir.ForKind` API reference describes
+the other execution kinds.
 
-.. literalinclude:: examples/statements_and_functions.py
+Each vector access in this example requires four valid channels.
+In the IR API version, the condition
+``full_vector = j + four <= end`` checks this before selecting the vector or
+scalar path. Here, ``j`` is the start of the current group, ``four`` is an
+int64 constant, and ``end`` is the channel count:
+
+.. literalinclude:: examples/sigmoid.py
    :language: python
    :start-after: # begin branch
    :end-before: # end branch
+   :dedent: 4
 
-``If`` and ``While`` use boolean conditions. ``If`` requires an explicit
-``else_case`` argument; pass None when there is no else branch.
+For 128 channels, every group is complete. For 130 channels, the group starting
+at ``j=128`` has only two elements. The else branch handles those elements
+with a scalar loop, keeping the vector access within the tensor's bounds:
 
-A loop instead repeats a body. This loop evaluates each index from zero through
-three:
+.. literalinclude:: examples/sigmoid.py
+   :language: python
+   :start-after: # begin scalar tail
+   :end-before: # end scalar tail
+   :dedent: 4
 
-.. literalinclude:: examples/statements_and_functions.py
+``k`` starts at ``j`` and stops before ``end``. In the 130-channel case, it
+processes channels 128 and 129. The binding defines one activated value, then
+the store writes it to ``Y[i, k]``.
+
+The surrounding loops cover samples and channel groups:
+
+.. literalinclude:: examples/sigmoid.py
    :language: python
    :start-after: # begin loop
    :end-before: # end loop
+   :dedent: 4
 
-``For`` takes an exclusive ``end`` and explicit ``step`` and ``kind`` arguments.
-Its variable, bounds, and step must have matching scalar integer types after
-conversion.
+``batch_loop`` advances ``i`` by one sample. ``channel_loop`` advances ``j``
+by four channels, selecting the vector or scalar body at each step. Both
+loops use int64 variables, bounds, and steps. The vector operations inside
+an iteration are represented by their four-lane expressions.
 
-The ``kind`` argument controls how loop iterations are executed.
-``ForKind.DEFAULT`` executes them in order, one after another.
-See :class:`~tvm_tirx.ir.ForKind` for the available execution kinds.
+Scope determines where a definition can be used. A variable defined inside
+a branch or loop is available only within that body. In the example,
+``packed_value`` is defined inside the vector branch, while ``scalar_value``
+is defined inside the tail loop. Neither is available after its body. The
+loop variables ``i``, ``j``, and ``k`` are likewise visible only within their
+loop bodies.
 
-``Break`` exits a loop, and ``Continue`` starts its next iteration.
+Some operators introduce their own statement bodies.
+:class:`ir.RegionStmt <tvm_tirx.ir.RegionStmt>` represents these using a
+registered operator, whose definition specifies the body's parameters.
 
-Variable scope determines where a definition can be used. The loop defines ``i``
-inside its body; it cannot be used after the loop. Branch-local definitions
-similarly stay inside their branch. Each variable object has one definition,
-and its uses refer to that object.
-
-``ir.RegionStmt`` lets an operator define how a nested body is executed without
-introducing a new statement class. Its ``op`` field refers to the registered
-``ir.Op`` that defines this behavior. Inputs in ``args`` and ``attrs``
-are evaluated in the enclosing scope. ``body_params`` defines variables
-visible within ``body``;
-``result_vars`` defines variables available to subsequent statements in the
-enclosing sequence. See :class:`~tvm_tirx.ir.RegionStmt` for the operator
-contract.
-
-To check these definition and scope rules, the body needs the context of a
-complete function or module. :doc:`functions_and_modules` supplies that context;
-``tirx.analysis.check_well_formed`` then checks variable and tensor uses and loop
-control. Invalid uses raise ``RuntimeError`` by default; ``assert_mode=False``
-returns False instead.
-
-The :download:`statements_and_functions.py <examples/statements_and_functions.py>`
-example completes and runs the increment function. See
-:doc:`/reference/python/ir` for statement constructors and
-:doc:`/reference/python/tirx.analysis` for verification APIs.
+These scope rules also apply to programs built through the IR API. After
+construction, :func:`tirx.analysis.check_well_formed <tvm_tirx.tirx.analysis.check_well_formed>`
+can check a function or module for invalid variable and tensor uses and
+misplaced loop-control statements.
