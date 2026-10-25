@@ -27,11 +27,11 @@
 //! packing arguments. A signature generates its validator from its argument types, as C++
 //! `OpDef::signature` does from `sig::arg<T>`; each signature is its own compiled function.
 //!
-//! The [`register_ops!`](crate::register_ops) blocks are gathered at link time, wherever in the
-//! program or library they are, and run when it loads, as a C++ static init block does: once
-//! Python loads a library built on this crate, by any means, it sees its operators as it sees
-//! those of a C++ library. A block that several libraries of a process have, as each links its
-//! own copy of a crate they share, registers its operators once.
+//! The [`register_ops!`](crate::register_ops) and [`register_types!`](crate::register_types)
+//! blocks are gathered at link time, wherever in the program or library they are, and run when it
+//! loads, as a C++ static init block does: once Python loads a library built on this crate, by any
+//! means, it sees its operators and types as it sees those of a C++ library. A block that several
+//! libraries of a process have, as each links its own copy of a crate they share, runs once.
 
 use std::any::TypeId;
 use std::cell::RefCell;
@@ -412,7 +412,7 @@ impl OpHandle {
             Some(op) => op,
             None => {
                 let op = Op::get(self.name).or_else(|missing| {
-                    let registered = register_defined_ops();
+                    let registered = register_defined_ir();
                     Op::get(self.name).map_err(|_| match registered {
                         Ok(()) => missing,
                         Err(failed) => {
@@ -435,10 +435,12 @@ impl OpHandle {
     }
 }
 
-/// A [`register_ops!`](crate::register_ops) block, gathered at link time.
+/// A [`register_ops!`](crate::register_ops) or [`register_types!`](crate::register_types) block,
+/// gathered at link time.
 #[doc(hidden)]
-pub struct OpRegistration {
-    /// The module and line of the block.
+pub struct Registration {
+    /// The macro of the block, and its module and line.
+    kind: &'static str,
     module: &'static str,
     line: u32,
     /// The version of the block's crate and a hash of the block's text, which with the module and
@@ -450,15 +452,17 @@ pub struct OpRegistration {
     outcome: OnceLock<std::result::Result<(), std::string::String>>,
 }
 
-/// The blocks of [`register_ops!`](crate::register_ops), gathered at link time from the whole
-/// program or library.
+/// The blocks of [`register_ops!`](crate::register_ops) and
+/// [`register_types!`](crate::register_types), gathered at link time from the whole program or
+/// library.
 #[doc(hidden)]
 #[linkme::distributed_slice]
-pub static OP_REGISTRATIONS: [OpRegistration];
+pub static REGISTRATIONS: [Registration];
 
-impl OpRegistration {
+impl Registration {
     #[doc(hidden)]
     pub const fn __new(
+        kind: &'static str,
         module: &'static str,
         line: u32,
         version: &'static str,
@@ -466,7 +470,7 @@ impl OpRegistration {
         register: fn() -> Result<()>,
     ) -> Self {
         let text_hash = text_hash(text);
-        Self { module, line, version, text_hash, register, outcome: OnceLock::new() }
+        Self { kind, module, line, version, text_hash, register, outcome: OnceLock::new() }
     }
 
     /// The identity of the block in the process, `module:line@version#hash`: the same in every
@@ -478,11 +482,11 @@ impl OpRegistration {
     }
 
     /// The name of the global function that marks the block registered in the process,
-    /// `ir.registered_op_block.<identity>`. The libraries of a process share the global function
+    /// `ir.registered_block.<identity>`. The libraries of a process share the global function
     /// table of TVM FFI, and their statics are their own.
     #[doc(hidden)]
     pub fn marker(&self) -> std::string::String {
-        format!("ir.registered_op_block.{}", self.identity())
+        format!("ir.registered_block.{}", self.identity())
     }
 
     /// Run the block if it has not run. The caller that runs a failing block gets its error;
@@ -501,15 +505,15 @@ impl OpRegistration {
             (Some(error), _) => Err(error),
             (None, Ok(())) => Ok(()),
             (None, Err(text)) => {
-                let message = format!("The register_ops! block at {} failed: {text}", self.place());
+                let message = format!("The {} block at {} failed: {text}", self.kind, self.place());
                 Err(Error::new(INTERNAL_ERROR, &message, ""))
             }
         }
     }
 
     /// Run the block unless another library of the process has run it. Every library links its
-    /// own copy of the crates it is built from, so the same block can be in several, and its
-    /// operators are registered once, with the hooks of the first library that runs it. The block
+    /// own copy of the crates it is built from, so the same block can be in several, and what it
+    /// defines is registered once, with the hooks of the first library that runs it. The block
     /// is marked once it succeeds, so that one that fails fails in every library.
     fn run(&self) -> Result<()> {
         let marker = self.marker();
@@ -541,55 +545,59 @@ const fn text_hash(text: &str) -> u64 {
     hash
 }
 
-/// Run every [`register_ops!`](crate::register_ops) block of this program or library that has
-/// not run, in the order of their modules and lines; running again does nothing. Every block is
-/// tried, and the error lists those that failed. A block that another library of the process has
-/// registered, from the same version of its crate and the same text, is skipped: libraries that
-/// link the same crate register its operators once.
+/// Run every [`register_ops!`](crate::register_ops) and [`register_types!`](crate::register_types)
+/// block of this program or library that has not run, in the order of their modules and lines;
+/// running again does nothing. Every block is tried, and the error lists those that failed. A
+/// block that another library of the process has registered, from the same version of its crate
+/// and the same text, is skipped: libraries that link the same crate register its operators and
+/// types once.
 ///
 /// The blocks run when their program or library loads, so this reports the errors of those that
 /// failed. Every library built on this crate exports it as the TVM FFI function
-/// `tirx_register_ops`, which `import tvm_tirx` calls on `libtvm_tirx_rust` to raise them. Where
+/// `tirx_register_ir`, which `import tvm_tirx` calls on `libtvm_tirx_rust` to raise them. Where
 /// the loader does not run the blocks, the first lookup through an [`OpHandle`] of an operator
 /// that is not registered calls it.
-pub fn register_defined_ops() -> Result<()> {
-    let mut blocks: Vec<&OpRegistration> = OP_REGISTRATIONS.iter().collect();
+pub fn register_defined_ir() -> Result<()> {
+    let mut blocks: Vec<&Registration> = REGISTRATIONS.iter().collect();
     blocks.sort_by_key(|block| (block.module, block.line));
-    let mut failures: Vec<(&OpRegistration, Error)> =
+    let mut failures: Vec<(&Registration, Error)> =
         blocks.into_iter().filter_map(|block| block.register().err().map(|e| (block, e))).collect();
     if failures.len() <= 1 {
         return failures.pop().map_or(Ok(()), |(_, error)| Err(error));
     }
-    let mut message = format!("{} register_ops! blocks failed:", failures.len());
+    let mut kinds: Vec<&str> = failures.iter().map(|(block, _)| block.kind).collect();
+    kinds.sort();
+    kinds.dedup();
+    let mut message = format!("{} {} blocks failed:", failures.len(), kinds.join(" and "));
     for (block, error) in &failures {
         message.push_str(&format!("\n  {}: {}: {}", block.place(), error.kind(), error.message()));
     }
     Err(Error::new(failures[0].1.kind(), &message, ""))
 }
 
-/// The constructor of every [`register_ops!`](crate::register_ops) block, which the loader runs
-/// when the program or library loads: the first one keeps the library loaded and runs every block
-/// of it. An error cannot reach a caller here, so it is printed; [`register_defined_ops`] reports
-/// it again.
+/// The constructor of every [`register_ops!`](crate::register_ops) and
+/// [`register_types!`](crate::register_types) block, which the loader runs when the program or
+/// library loads: the first one keeps the library loaded and runs every block of it. An error
+/// cannot reach a caller here, so it is printed; [`register_defined_ir`] reports it again.
 #[doc(hidden)]
 pub extern "C" fn __register_at_load() {
     static LOADED: Once = Once::new();
     LOADED.call_once(|| {
         let library = keep_loaded().unwrap_or_else(|| "register_ops!".to_string());
-        match catch_unwind(register_defined_ops) {
+        match catch_unwind(register_defined_ir) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => eprintln!(
-                "{library}: registering operators failed: {}: {}",
+                "{library}: registering operators and types failed: {}: {}",
                 error.kind(),
                 error.message()
             ),
-            Err(_) => eprintln!("{library}: registering operators panicked"),
+            Err(_) => eprintln!("{library}: registering operators and types panicked"),
         }
     });
 }
 
-/// Keep the library that holds this code loaded for the rest of the process, as the operators it
-/// registers keep its hooks: unloading it, as `tvm_ffi.load_module` does when Python drops the
+/// Keep the library that holds this code loaded for the rest of the process, as the operators and
+/// types it registers keep its hooks: unloading it, as `tvm_ffi.load_module` does when Python drops the
 /// module, would leave them dangling. Returns the path of the library.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn keep_loaded() -> Option<std::string::String> {
@@ -679,10 +687,10 @@ fn doc_text(doc: &str) -> std::string::String {
 ///
 /// As a C++ static init block, a block runs when its program or library loads: it adds a
 /// constructor, which the loader runs, and the first constructor runs every block of the program
-/// or library with [`register_defined_ops`]. Python sees the operators of a library once it loads
+/// or library with [`register_defined_ir`]. Python sees the operators of a library once it loads
 /// it, by any means, and the library stays loaded for the process, as the operators keep its
 /// hooks. An error cannot reach a caller when the library loads: it is printed, and
-/// [`register_defined_ops`] (`tirx_register_ops`) and the handles report it again. Where the
+/// [`register_defined_ir`] (`tirx_register_ir`) and the handles report it again. Where the
 /// loader does not run the constructor, an [`OpHandle`] runs the blocks on the first lookup of an
 /// operator that is not registered.
 ///
@@ -695,22 +703,33 @@ fn doc_text(doc: &str) -> std::string::String {
 #[macro_export]
 macro_rules! register_ops {
     ($($def:expr);* $(;)?) => {
+        $crate::__register_block!("register_ops!", stringify!($($def);*), || {
+            $($crate::ir::OpDef::op($def)?;)*
+            Ok(())
+        });
+    };
+}
+
+/// The registration of a [`register_ops!`](crate::register_ops) or
+/// [`register_types!`](crate::register_types) block: gathered at link time, and run by a
+/// constructor when its program or library loads.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __register_block {
+    ($kind:literal, $text:expr, $register:expr) => {
         const _: () = {
-            fn register() -> $crate::tvm_ffi::Result<()> {
-                $($crate::ir::OpDef::op($def)?;)*
-                Ok(())
-            }
-            #[$crate::__private::linkme::distributed_slice($crate::ir::OP_REGISTRATIONS)]
+            #[$crate::__private::linkme::distributed_slice($crate::ir::REGISTRATIONS)]
             #[linkme(crate = $crate::__private::linkme)]
-            static REGISTRATION: $crate::ir::OpRegistration = $crate::ir::OpRegistration::__new(
+            static REGISTRATION: $crate::ir::Registration = $crate::ir::Registration::__new(
+                $kind,
                 module_path!(),
                 line!(),
                 match option_env!("CARGO_PKG_VERSION") {
                     Some(version) => version,
                     None => "",
                 },
-                stringify!($($def);*),
-                register,
+                $text,
+                $register,
             );
             #[used]
             #[cfg_attr(target_os = "linux", link_section = ".init_array")]

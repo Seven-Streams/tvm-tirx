@@ -16,11 +16,11 @@
 # under the License.
 """Operators defined in Rust are registered when their library loads, as C++ ones are.
 
-``rust/examples/define_ops.rs`` is built by cargo into a library of its own, which a fresh
+``rust/examples/define_ir.rs`` is built by cargo into a library of its own, which a fresh
 interpreter loads, as ``import tvm_tirx`` loads libtvm_tirx_rust, and then uses its operators as it
-uses C++ ones: registering them also gives them their TVMScript builders. A copy of the library is
-a second library with the same ``register_ops!`` blocks, as libraries that link the same crate
-have.
+uses C++ ones: registering them also gives them their TVMScript builders. Its type is registered
+with them. A copy of the library is a second library with the same blocks, as libraries that link
+the same crate have.
 """
 
 import os
@@ -55,8 +55,8 @@ def find_cargo():
 
 
 @pytest.fixture(scope="module")
-def define_ops_library():
-    """The example library of Rust operators, built by cargo."""
+def define_ir_library():
+    """The example library of Rust operators and types, built by cargo."""
     cargo = find_cargo()
     if cargo is None or not shutil.which("tvm-ffi-config") or not shutil.which("tvm-tirx-config"):
         pytest.skip(
@@ -65,11 +65,11 @@ def define_ops_library():
         )
     manifest = RUST_DIR / "Cargo.toml"
     subprocess.run(
-        [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ops"], check=True
+        [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ir"], check=True
     )
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
-    name = {"darwin": "libdefine_ops.dylib", "win32": "define_ops.dll"}.get(
-        sys.platform, "libdefine_ops.so"
+    name = {"darwin": "libdefine_ir.dylib", "win32": "define_ir.dll"}.get(
+        sys.platform, "libdefine_ir.so"
     )
     return target_dir / "debug" / "examples" / name
 
@@ -145,7 +145,7 @@ def test_library_is_loaded_on_import():
     assert "tvm_tirx_rust" in _LOADED_LIBS
 
 
-def test_rust_operators_are_registered_by_their_library(define_ops_library):
+def test_rust_operators_are_registered_by_their_library(define_ir_library):
     run_python(
         """
         import sys
@@ -155,7 +155,7 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
 
         # Registered when the library loads, as libtvm_tirx_rust is when `import tvm_tirx` loads
         # it, with the doc comment and signature the Rust definition gives.
-        tvm_ffi.load_module(sys.argv[1]).tirx_register_ops()
+        tvm_ffi.load_module(sys.argv[1])
         clamp = ir.Op.get("tirx.example_clamp")
         assert clamp.doc == "Clamp an index to the range `[0, bound)`."
         assert [arg.name for arg in clamp.args_info] == ["index", "bound"]
@@ -175,13 +175,55 @@ def test_rust_operators_are_registered_by_their_library(define_ops_library):
             raise AssertionError("a float bound passed validation")
         """,
         ROUND_TRIP,
-        libraries=[define_ops_library],
+        libraries=[define_ir_library],
     )
 
 
-def test_a_library_registers_its_operators_when_python_loads_it(define_ops_library, tmp_path):
-    copy = tmp_path / define_ops_library.name
-    shutil.copy(define_ops_library, copy)
+def test_rust_types_are_registered_by_their_library(define_ir_library):
+    run_python(
+        """
+        import sys
+
+        import tvm_ffi
+        import tvm_tirx
+        from tvm_tirx import ir
+        from tvm_tirx.script import tirx as T
+
+        # Registered with the operators when the library loads, the type gets the class its
+        # TVMScript constructor names, which constructs it from its fields, as a C++ type is
+        # constructed.
+        tvm_ffi.load_module(sys.argv[1])
+        pair = T.ExamplePair(T.int32, second=T.float32)
+        assert pair.script() == "T.ExamplePair(T.int32, T.float32)"
+        assert tvm_ffi.structural_equal(pair.first, T.int32)
+
+        # TVMScript prints and parses it, and a JSON graph holds it.
+        @T.function
+        def func(p: T.ExamplePair(T.int32, T.float32)):
+            T.evaluate(p)
+
+        text = func.script()
+        assert "p: T.ExamplePair(T.int32, T.float32)" in text, text
+        parsed = tvm_tirx.script.parse(text, extra_vars={"T": T})
+        assert tvm_ffi.structural_equal(parsed, func), parsed.script()
+        assert tvm_ffi.structural_equal(ir.load_json(ir.save_json(func)), func)
+
+        # A class written for it in Python takes the name.
+        @tvm_ffi.register_object("tirx.ExamplePairType")
+        class ExamplePair(ir.Type):
+            pass
+
+        assert T.expose_script_type("tirx.ExamplePairType") is ExamplePair
+        assert T.ExamplePair is ExamplePair
+        assert type(T.ExamplePair(T.int32, T.float32)) is ExamplePair
+        """,
+        libraries=[define_ir_library],
+    )
+
+
+def test_a_library_registers_its_operators_when_python_loads_it(define_ir_library, tmp_path):
+    copy = tmp_path / define_ir_library.name
+    shutil.copy(define_ir_library, copy)
     stderr = run_python(
         """
         import ctypes
@@ -216,12 +258,12 @@ def test_a_library_registers_its_operators_when_python_loads_it(define_ops_libra
         assert ir.Op.get("tirx.example_clamp").same_as(clamp)
         """,
         ROUND_TRIP,
-        libraries=[define_ops_library, copy],
+        libraries=[define_ir_library, copy],
     )
-    assert "registering operators failed" not in stderr, stderr
+    assert "registering operators and types failed" not in stderr, stderr
 
 
-def test_a_block_that_fails_when_its_library_loads_is_reported(define_ops_library):
+def test_a_block_that_fails_when_its_library_loads_is_reported(define_ir_library):
     stderr = run_python(
         """
         import sys
@@ -235,15 +277,15 @@ def test_a_block_that_fails_when_its_library_loads_is_reported(define_ops_librar
         module = tvm_ffi.load_module(sys.argv[1])
         ir.Op.get("tirx.example_clamp")
 
-        # `tirx_register_ops` raises the error again.
+        # `tirx_register_ir` raises the error again.
         try:
-            module.tirx_register_ops()
+            module.tirx_register_ir()
         except Exception as error:
             assert "tirx.example_mark is registered before" in str(error), error
         else:
             raise AssertionError("the block that failed was not reported")
         """,
-        libraries=[define_ops_library],
+        libraries=[define_ir_library],
     )
-    assert "registering operators failed" in stderr, stderr
+    assert "registering operators and types failed" in stderr, stderr
     assert "Operator tirx.example_mark is registered before" in stderr, stderr

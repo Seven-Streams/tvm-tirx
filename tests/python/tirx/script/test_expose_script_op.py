@@ -14,13 +14,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""TVMScript builders generated for registered operators."""
+"""TVMScript builders generated for registered operators, and classes for registered types."""
 
 import pytest
 import tvm_ffi
+from tvm_ffi.dataclasses import py_class
 
 import tvm_tirx
-from tvm_tirx.ir import Call, Op, PrimType, assert_structural_equal, register_op_attr
+from tvm_tirx.ir import Call, Op, PrimType, Type, assert_structural_equal, register_op_attr
 from tvm_tirx.script import parser
 from tvm_tirx.script import tirx as T
 from tvm_tirx.tirx.script import ir_builder as builder
@@ -33,6 +34,27 @@ def define(name, args, result):
         Op.get(name).set_signature(args)
         register_op_attr(name, "TFixedReturnType", PrimType(result))
     return Op.get(name)
+
+
+@py_class("tirx.TestScriptPairType")
+class ScriptPair(Type):
+    """A pair of types, printed as ``T.TestScriptPair(first, second)``."""
+
+    first: Type
+    second: Type
+
+
+@py_class("test_script_types.BoxType")
+class ScriptBox(Type):
+    """A type and a count, printed as ``test_script_types.Box(elem, count)``."""
+
+    elem: Type
+    count: int
+
+
+@py_class("tirx.evaluateType")
+class ScriptEvaluate(Type):
+    """A type whose printed name, ``T.evaluate``, is taken by a builder."""
 
 
 @pytest.fixture
@@ -90,3 +112,26 @@ def test_existing_names_keep_their_values(exposed):
     define("tirx.supports_mutable_declarations", ["x"], "int32")
     with pytest.raises(ValueError, match="conflicts with a non-callable"):
         T.expose_script_op("tirx.supports_mutable_declarations")
+
+
+def test_type_classes_round_trip_types_under_every_root(exposed):
+    exposed += ["TestScriptPair", "test_script_types"]
+    assert T.expose_script_type("tirx.TestScriptPairType") is ScriptPair
+    assert T.expose_script_type("test_script_types.BoxType") is ScriptBox
+    assert T.expose_script_type("tirx.TestScriptPairType") is T.TestScriptPair
+    test_script_types = parser.test_script_types
+
+    @T.function
+    def func(p: T.TestScriptPair(T.int32, T.float32), b: test_script_types.Box(T.int8, 4)):
+        T.evaluate(p)
+        T.evaluate(b)
+
+    text = func.script()
+    assert "p: T.TestScriptPair(T.int32, T.float32)" in text, text
+    assert "b: test_script_types.Box(T.int8, 4)" in text, text
+    assert_structural_equal(tvm_tirx.script.parse(text, extra_vars={"T": T}), func)
+
+
+def test_type_names_taken_by_other_values_are_errors():
+    with pytest.raises(ValueError, match="conflicts with"):
+        T.expose_script_type("tirx.evaluateType")

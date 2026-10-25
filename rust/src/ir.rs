@@ -45,6 +45,7 @@ pub mod stmt;
 pub(crate) mod support;
 pub mod transform;
 pub mod r#type;
+pub mod type_def;
 pub mod unique_name_supply;
 
 pub use attrs::*;
@@ -58,6 +59,7 @@ pub use op::*;
 pub use op_def::*;
 pub use stmt::*;
 pub use r#type::*;
+pub use type_def::*;
 pub use unique_name_supply::*;
 
 // tvm-ffi-stubgen(begin): import-section
