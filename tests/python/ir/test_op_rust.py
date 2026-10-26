@@ -34,7 +34,10 @@ from pathlib import Path
 
 import pytest
 
+import tvm_tirx
+
 RUST_DIR = Path(__file__).resolve().parents[3] / "rust"
+EXTENSION_DIR = RUST_DIR.parent / "examples" / "extension"
 
 
 def find_cargo():
@@ -54,29 +57,51 @@ def find_cargo():
     return None
 
 
-@pytest.fixture(scope="module")
-def define_ir_library():
-    """The example library of Rust operators and types, built by cargo."""
+def cargo_build(manifest, *args):
+    """Build with cargo in rust/'s target directory, shared with the crate, and return the
+    directory of the debug build."""
     cargo = find_cargo()
     if cargo is None or not shutil.which("tvm-ffi-config") or not shutil.which("tvm-tirx-config"):
         pytest.skip(
             "building rust/ needs a cargo as new as its rust-version, and tvm-ffi-config and "
             "tvm-tirx-config on PATH"
         )
-    manifest = RUST_DIR / "Cargo.toml"
-    subprocess.run(
-        [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ir"], check=True
-    )
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
-    name = {"darwin": "libdefine_ir.dylib", "win32": "define_ir.dll"}.get(
-        sys.platform, "libdefine_ir.so"
-    )
-    return target_dir / "debug" / "examples" / name
+    env = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
+    subprocess.run([cargo, "build", "--manifest-path", str(manifest), *args], check=True, env=env)
+    return target_dir / "debug"
 
 
-def run_python(*code, libraries):
-    """Run `code` in a fresh interpreter, with the paths of `libraries` as its arguments, and
-    return its standard error.
+def library_name(name):
+    """The file name of the shared library that cargo builds for `name`."""
+    return {"darwin": f"lib{name}.dylib", "win32": f"{name}.dll"}.get(sys.platform, f"lib{name}.so")
+
+
+def build_rust_example(example):
+    """Build an example library of Rust operators and types with cargo."""
+    debug_dir = cargo_build(RUST_DIR / "Cargo.toml", "--example", example)
+    return debug_dir / "examples" / library_name(example)
+
+
+@pytest.fixture(scope="module")
+def define_ir_library():
+    """The example library of Rust operators and types, built by cargo."""
+    return build_rust_example("define_ir")
+
+
+@pytest.fixture(scope="module")
+def extension_package(tmp_path_factory):
+    """The my_ext package of examples/extension, laid out as its wheel installs it."""
+    debug_dir = cargo_build(EXTENSION_DIR / "Cargo.toml")
+    root = tmp_path_factory.mktemp("extension")
+    package = shutil.copytree(EXTENSION_DIR / "python" / "my_ext", root / "my_ext")
+    shutil.copy(debug_dir / library_name("my_ext"), package)
+    return root
+
+
+def run_python(*code, libraries=(), python_path=()):
+    """Run `code` in a fresh interpreter, with the paths of `libraries` as its arguments and
+    `python_path` before PYTHONPATH, and return its standard error.
 
     The code runs from a file: TVMScript reads the source of the functions it parses, which Python
     keeps for code passed with `-c` only from 3.13 on.
@@ -84,11 +109,13 @@ def run_python(*code, libraries):
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "script.py"
         script.write_text("\n".join(textwrap.dedent(part) for part in code))
+        paths = [*map(str, python_path), *filter(None, [os.environ.get("PYTHONPATH")])]
         result = subprocess.run(
             [sys.executable, str(script), *map(str, libraries)],
             capture_output=True,
             text=True,
             check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(paths)},
         )
     assert result.returncode == 0, result.stderr
     return result.stderr
@@ -138,6 +165,131 @@ ROUND_TRIP = """
 """
 
 
+# Checks of the extension beyond those of its example script: the type, printing and parsing,
+# invalid calls, chained products, float64 parts, and what the lowering rejects.
+EXTENSION_CHECKS = """
+    # Run after examples/extension/run_example.py, whose names it uses.
+    import tvm_ffi
+    from tvm_tirx import ir, tirx
+
+    # Inspect the registered type and round-trip the IR through text and JSON.
+    a_var, b_var = ir.Var("a", "float32"), ir.Var("b", "float32")
+    z = my_ext.complex(a_var, b_var)
+    assert isinstance(z.ty, my_ext.Complex)
+    assert tvm_ffi.structural_equal(z.ty.elem, ir.PrimType("float32"))
+    assert tvm_ffi.structural_equal(ir.load_json(ir.save_json(z.ty)), z.ty)
+    text = complex_product.script()
+    parsed = tvm_tirx.script.parse(text, extra_vars={"T": T, "my_ext": my_ext})
+    assert tvm_ffi.structural_equal(parsed, complex_product)
+    assert tvm_ffi.structural_equal(ir.load_json(ir.save_json(complex_product)), complex_product)
+    for name in ("complex", "cmul", "real", "imag"):
+        op = ir.Op.get(f"my_ext.{name}")
+        assert op.get_attr("TCallEffectKind") == ir.CallEffectKind.Pure
+        assert getattr(my_ext, name).__doc__ == op.doc
+
+    lower = my_ext.lower_complex()
+    lowered = lower(ir.IRModule({"main": complex_product}))
+    assert "my_ext." not in lowered["main"].script()
+
+
+    for original, tensor in zip((a, b, c, d), inputs):
+        np.testing.assert_array_equal(tensor.numpy(), original)
+
+
+    # Further checks stay out of the tutorial's code slices.
+    def expect_error(error_type, message, function, *args):
+        try:
+            function(*args)
+        except error_type as error:
+            assert message in str(error), str(error)
+        else:
+            raise AssertionError(f"expected {error_type.__name__}: {message}")
+
+
+    # The parts are scalar floats of one type; nothing is converted or promoted.
+    for dtype in ("int32", "float32x4"):
+        wrong = ir.Var("wrong", dtype)
+        expect_error(TypeError, "expected a scalar float", my_ext.complex, wrong, b_var)
+        expect_error(TypeError, "expected a scalar float", my_ext.complex, a_var, wrong)
+    wide = ir.Var("wide", "float64")
+    expect_error(TypeError, "parts of the same type", my_ext.complex, a_var, wide)
+    z64 = my_ext.complex(wide, wide)
+    assert tvm_ffi.structural_equal(z64.ty, my_ext.Complex(T.float64))
+    assert tvm_ffi.structural_equal(my_ext.real(z64).ty, T.float64)
+    expect_error(TypeError, "complex values of the same type", my_ext.cmul, z, z64)
+    brain = ir.Var("brain", "bfloat16")
+    assert tvm_ffi.structural_equal(my_ext.complex(brain, brain).ty, my_ext.Complex(T.bfloat16))
+    expect_error(TypeError, "cmul expects a complex value", my_ext.cmul, a_var, z)
+    expect_error(TypeError, "cmul expects a complex value", my_ext.cmul, z, a_var)
+    expect_error(TypeError, "real expects a complex value", my_ext.real, a_var)
+    expect_error(TypeError, "imag expects a complex value", my_ext.imag, a_var)
+
+    # Explicit result types must not let invalid calls escape validation.
+    for name, args in (("complex", [a_var, b_var]), ("cmul", [z, z]), ("real", [z]), ("imag", [z])):
+        invalid = ir.Call(f"my_ext.{name}", args, ty="int32")
+        expect_error(TypeError, "incorrect result type", invalid.validate)
+    invalid = ir.Call("my_ext.cmul", [a_var, z], ty=z.ty)
+    expect_error(TypeError, "expects a complex value", invalid.validate)
+    bad_type = my_ext.Complex(T.int32)
+    expect_error(TypeError, "expected a scalar float", my_ext.real, ir.Var("bad", bad_type))
+
+    # Complex function parameters and unconsumed complex values are outside this lowering.
+    unsupported = tirx.Function([ir.Var("z", z.ty)], ir.SeqStmt([ir.Evaluate(0)]))
+    expect_error(ValueError, "unsupported complex type", lower, ir.IRModule({"main": unsupported}))
+    unsupported = tirx.Function([a_var, b_var], ir.SeqStmt([ir.Evaluate(z)]))
+    expect_error(ValueError, "unsupported complex", lower, ir.IRModule({"main": unsupported}))
+
+
+    # Aliases, chained products and inline constructors take the same lowering path.
+    @T.function
+    def cube(
+        A: T.Tensor((N,), "float32"),
+        B: T.Tensor((N,), "float32"),
+        R: T.Tensor((N,), "float32"),
+        Im: T.Tensor((N,), "float32"),
+    ):
+        for i in range(N):
+            z = my_ext.complex(A[i], B[i])
+            alias = z
+            square = my_ext.cmul(alias, z)
+            R[i] = my_ext.real(my_ext.cmul(square, my_ext.complex(A[i], B[i])))
+            Im[i] = my_ext.imag(my_ext.cmul(square, z))
+
+
+    cube_lowered = lower(ir.IRModule({"main": cube}))
+    assert "my_ext." not in cube_lowered["main"].script()
+    cube_compiled = tvm_tirx.compile(cube, target="llvm", pipeline="my_ext")
+    cube_compiled(*inputs[:2], real_out, imag_out)
+    expected_cube = (a + 1j * b) ** 3
+    np.testing.assert_allclose(real_out.numpy(), expected_cube.real, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(imag_out.numpy(), expected_cube.imag, rtol=1e-5, atol=1e-6)
+
+
+    # The same lowering handles float64 parts.
+    @T.function
+    def product64(
+        A: T.Tensor((N,), "float64"),
+        B: T.Tensor((N,), "float64"),
+        R: T.Tensor((N,), "float64"),
+        Im: T.Tensor((N,), "float64"),
+    ):
+        for i in range(N):
+            z = my_ext.complex(A[i], B[i])
+            product = my_ext.cmul(z, z)
+            R[i] = my_ext.real(product)
+            Im[i] = my_ext.imag(product)
+
+
+    a64, b64 = rng.standard_normal((2, N))
+    real64, imag64 = runtime.empty((N,), "float64"), runtime.empty((N,), "float64")
+    product64_compiled = tvm_tirx.compile(product64, target="llvm", pipeline="my_ext")
+    product64_compiled(runtime.tensor(a64), runtime.tensor(b64), real64, imag64)
+    expected64 = (a64 + 1j * b64) ** 2
+    np.testing.assert_allclose(real64.numpy(), expected64.real, rtol=1e-12)
+    np.testing.assert_allclose(imag64.numpy(), expected64.imag, rtol=1e-12)
+"""
+
+
 def test_library_is_loaded_on_import():
     """``import tvm_tirx`` loads libtvm_tirx_rust, when the build has it, as a backend."""
     from tvm_ffi.libinfo import _find_library_by_basename  # pylint: disable=import-outside-toplevel
@@ -150,6 +302,12 @@ def test_library_is_loaded_on_import():
     except RuntimeError:
         pytest.skip("the build has no libtvm_tirx_rust (TVM_TIRX_USE_RUST)")
     assert "tvm_tirx_rust" in _LOADED_LIBS
+
+
+@pytest.mark.skipif(not tvm_tirx.runtime.enabled("llvm"), reason="LLVM is not enabled")
+def test_extension_example(extension_package):
+    script = EXTENSION_DIR / "run_example.py"
+    run_python(script.read_text(), EXTENSION_CHECKS, python_path=[extension_package])
 
 
 def test_rust_operators_are_registered_by_their_library(define_ir_library):
