@@ -18,12 +18,12 @@
 
 set -euxo pipefail
 
-# Install the toolchain of the crate's rust-version, which the CI images do not have, for the build
-# and the tests of rust/. Source it from the repository root.
+# Install the toolchain given as the first argument, defaulting to the crate's rust-version
+# for the build and tests of rust/. Source it from the repository root.
 export RUSTUP_HOME="$PWD/.local/rustup" CARGO_HOME="$PWD/.local/cargo"
 curl --proto '=https' --tlsv1.2 --retry 3 -sSf https://sh.rustup.rs | sh -s -- -y -q \
     --no-modify-path --profile minimal \
-    --default-toolchain "$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' rust/Cargo.toml)"
+    --default-toolchain "${1:-$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' rust/Cargo.toml)}"
 export PATH="$CARGO_HOME/bin:$PATH"
 
 # rustc links with the cc first on PATH, which in the CI images is a wrapper of sccache: link with

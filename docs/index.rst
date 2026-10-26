@@ -65,6 +65,7 @@ Table of Contents
 
    Python API <reference/python/index>
    C++ API <reference/cpp/index>
+   Rust API <reference/rust/index>
 
 .. toctree::
    :maxdepth: 1

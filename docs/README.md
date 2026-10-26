@@ -26,6 +26,9 @@ uv run --no-sync python -m sphinx -b html -W docs docs/_build/html
 ```
 
 Set `BUILD_CPP_DOCS=1` to also generate the C++ API reference; this requires Doxygen.
+Set `BUILD_RUST_DOCS=1` to also generate the Rust API reference with `cargo doc`; this
+requires Rust 1.85 or newer and the installed TIRx package, whose `tvm-tirx-config`
+the crate's build script runs.
 
 Open `docs/_build/html/index.html` to browse the Developer Manual and API reference.
 See [Build This Doc Site](dev/doc_build.rst) for local serving and clean rebuilds.

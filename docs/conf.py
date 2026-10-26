@@ -17,6 +17,8 @@
 
 import os
 import re
+import shutil
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -25,8 +27,12 @@ from types import ModuleType
 os.environ["TVM_FFI_BUILD_DOCS"] = "1"
 
 build_exhale = os.environ.get("BUILD_CPP_DOCS", "0") == "1"
+build_rust_docs = os.environ.get("BUILD_RUST_DOCS", "0") == "1"
+# Under sphinx-autobuild, keep cargo's incremental documentation instead of rebuilding it.
+is_autobuild = any("sphinx-autobuild" in str(arg) for arg in sys.argv)
 
 _DOCS_DIR = Path(__file__).resolve().parent
+_RUST_DIR = _DOCS_DIR.parent / "rust"
 
 project = "tvm-tirx"
 html_title = project
@@ -166,6 +172,41 @@ def _prepare_stub_files() -> None:
             dst_path.write_text(src_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 
+def _build_rust_docs() -> None:
+    """Build the Rust API reference with ``cargo doc`` when ``BUILD_RUST_DOCS=1``.
+
+    The crate's build script links ``libtvm_tirx_compiler`` through ``tvm-tirx-config``,
+    so the TIRx package must be installed and its ``tvm-tirx-config`` on ``PATH``, as
+    ``uv run`` arranges. The pages are copied into the HTML output by
+    :func:`_copy_rust_docs_to_output`.
+    """
+    if not build_rust_docs:
+        return
+    target_doc = _RUST_DIR / "target" / "doc"
+    if not is_autobuild and target_doc.exists():
+        shutil.rmtree(target_doc)  # drop the pages of items that no longer exist
+    print("Building the Rust API reference with cargo doc...")
+    env = {**os.environ, "RUSTDOCFLAGS": os.environ.get("RUSTDOCFLAGS", "-D warnings")}
+    # The crate and the tvm-ffi it re-exports, so the links between them stay local.
+    command = ["cargo", "doc", "--no-deps", "-p", "tvm-tirx", "-p", "tvm-ffi"]
+    try:
+        subprocess.run(command, check=True, cwd=_RUST_DIR, env=env)
+    except FileNotFoundError:
+        raise RuntimeError("BUILD_RUST_DOCS=1 needs cargo on PATH") from None
+
+
+def _copy_rust_docs_to_output(app, exception):
+    """Copy the ``cargo doc`` pages under ``reference/rust/generated`` of the HTML output."""
+    if exception is not None or not build_rust_docs:
+        return
+    src_dir = _RUST_DIR / "target" / "doc"
+    dst_dir = Path(app.outdir) / "reference" / "rust" / "generated"
+    if dst_dir.exists():
+        shutil.rmtree(dst_dir)
+    shutil.copytree(src_dir, dst_dir)
+    print(f"Copied the Rust API reference to {dst_dir}")
+
+
 def _mark_exhale_root_orphan(app, docname, source):
     """Prepend :orphan: to exhale-generated root so it stays out of the sidebar."""
     if docname == "reference/cpp/generated/index":
@@ -197,5 +238,7 @@ def _link_nested_class_to_enclosing_class(app, docname, source):
 
 def setup(app):
     _prepare_stub_files()
+    _build_rust_docs()
     app.connect("source-read", _mark_exhale_root_orphan)
     app.connect("source-read", _link_nested_class_to_enclosing_class)
+    app.connect("build-finished", _copy_rust_docs_to_output)

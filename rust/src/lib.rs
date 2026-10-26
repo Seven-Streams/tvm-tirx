@@ -322,5 +322,9 @@ pub use tvm_ffi;
 
 // The errors of the static init blocks of every library built on the crate, which
 // `import tvm_tirx` raises for `libtvm_tirx_rust`: `__tvm_ffi_tirx_register_ir`, the TVM FFI
-// function `tirx_register_ir` of the library as `tvm_ffi.load_module` loads it.
-tvm_ffi::tvm_ffi_dll_export_typed_func!(tirx_register_ir, tvm_ffi::run_static_init_blocks);
+// function `tirx_register_ir` of the library as `tvm_ffi.load_module` loads it. The module keeps
+// the symbol, which `#[no_mangle]` exports from wherever it is, out of the crate's documentation.
+#[doc(hidden)]
+pub mod exports {
+    tvm_ffi::tvm_ffi_dll_export_typed_func!(tirx_register_ir, tvm_ffi::run_static_init_blocks);
+}
