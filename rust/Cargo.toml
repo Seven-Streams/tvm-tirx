@@ -38,5 +38,11 @@ tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
 name = "define_ir"
 crate-type = ["cdylib"]
 
+# Complex numbers as a Rust type and operators, and a Rust pass that lowers them, which
+# `docs/advanced/examples/complex.py` compiles and runs.
+[[example]]
+name = "complex"
+crate-type = ["cdylib"]
+
 # Standalone crate: not a member of any enclosing workspace.
 [workspace]

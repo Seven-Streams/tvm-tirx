@@ -20,7 +20,8 @@
 interpreter loads, as ``import tvm_tirx`` loads libtvm_tirx_rust, and then uses its operators as it
 uses C++ ones: registering them also gives them their TVMScript builders. Its type is registered
 with them. A copy of the library is a second library with the same blocks, as libraries that link
-the same crate have.
+the same crate have. ``rust/examples/complex.rs`` adds a pass written in Rust, which lowers its type
+and operators before code generation, and ``docs/advanced/examples/complex.py`` uses it.
 """
 
 import os
@@ -34,7 +35,10 @@ from pathlib import Path
 
 import pytest
 
-RUST_DIR = Path(__file__).resolve().parents[3] / "rust"
+import tvm_tirx
+
+ROOT = Path(__file__).resolve().parents[3]
+RUST_DIR = ROOT / "rust"
 
 
 def find_cargo():
@@ -54,9 +58,8 @@ def find_cargo():
     return None
 
 
-@pytest.fixture(scope="module")
-def define_ir_library():
-    """The example library of Rust operators and types, built by cargo."""
+def build_example(name):
+    """The library of the Rust example `name`, built by cargo."""
     cargo = find_cargo()
     if cargo is None or not shutil.which("tvm-ffi-config") or not shutil.which("tvm-tirx-config"):
         pytest.skip(
@@ -65,13 +68,23 @@ def define_ir_library():
         )
     manifest = RUST_DIR / "Cargo.toml"
     subprocess.run(
-        [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ir"], check=True
+        [cargo, "build", "--manifest-path", str(manifest), "--example", name], check=True
     )
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
-    name = {"darwin": "libdefine_ir.dylib", "win32": "define_ir.dll"}.get(
-        sys.platform, "libdefine_ir.so"
-    )
-    return target_dir / "debug" / "examples" / name
+    file = {"darwin": f"lib{name}.dylib", "win32": f"{name}.dll"}.get(sys.platform, f"lib{name}.so")
+    return target_dir / "debug" / "examples" / file
+
+
+@pytest.fixture(scope="module")
+def define_ir_library():
+    """The example library of Rust operators and types."""
+    return build_example("define_ir")
+
+
+@pytest.fixture(scope="module")
+def complex_library():
+    """The example library of complex numbers: a Rust type, operators and pass."""
+    return build_example("complex")
 
 
 def run_python(*code, libraries):
@@ -289,3 +302,41 @@ def test_a_block_that_fails_when_its_library_loads_is_reported(define_ir_library
     )
     assert "registering operators and types failed" in stderr, stderr
     assert "Operator tirx.example_mark is registered before" in stderr, stderr
+
+
+@pytest.mark.skipif(not tvm_tirx.runtime.enabled("llvm"), reason="LLVM is not enabled")
+def test_rust_pass_lowers_rust_types_and_operators(complex_library):
+    # The documentation's example compiles and runs the function; these check what it prints.
+    run_python(
+        (ROOT / "docs" / "advanced" / "examples" / "complex.py").read_text(),
+        """
+        import pytest
+        import tvm_tirx
+
+        # TVMScript prints and parses the Rust type and operators.
+        text = cube.script()
+        assert "z: T.let[my_ext.Complex(T.float32)] = my_ext.complex(A[i], B[i])" in text, text
+        assert tvm_ffi.structural_equal(tvm_tirx.script.parse(text, extra_vars={"T": T}), cube)
+
+        # The Rust pass splits the complex variables and computes their parts.
+        text = lowered["main"].script()
+        assert "my_ext" not in text, text
+        assert "z_re: T.let[T.float32] = A[i]" in text, text
+
+        # Code generation knows no complex type: the default pipeline fails at the first use.
+        with pytest.raises(Exception, match="my_ext.real"):
+            tirx.compile(cube, target="llvm")
+
+        # The type checks of the operators are written in Rust, and so is the pass's own check.
+        with pytest.raises(TypeError, match="my_ext.real expects a complex value"):
+            my_ext.real(T.float32(1))
+
+        @T.function
+        def param(z: my_ext.Complex(T.float32), Re: T.Tensor((1,), "float32")):
+            Re[0] = my_ext.real(my_ext.cmul(z, z))
+
+        with pytest.raises(ValueError, match="LowerComplex cannot lower"):
+            lower_complex(ir.IRModule({"main": param}))
+        """,
+        libraries=[complex_library],
+    )
