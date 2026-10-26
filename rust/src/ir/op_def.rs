@@ -715,6 +715,7 @@ macro_rules! register_ops {
             #[used]
             #[cfg_attr(target_os = "linux", link_section = ".init_array")]
             #[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+            #[cfg_attr(windows, link_section = ".CRT$XCU")]
             static REGISTER_AT_LOAD: extern "C" fn() = $crate::ir::__register_at_load;
         };
     };
