@@ -26,7 +26,7 @@ mod common;
 use tvm_tirx::target::{self, Target, TargetKind, TargetKindObj, TargetObj};
 use tvm_tirx::tvm_ffi::{Any, Map, Object, ObjectRefCast, String as FfiString, TypeIndex};
 
-use common::{assert_type_contracts, empty_module, global};
+use common::{assert_type_contracts, empty_module, global, load_llvm_backend};
 
 fn config(kind: &str) -> Map<FfiString, Any> {
     Map::from_iter([(FfiString::from("kind"), Any::from(FfiString::from(kind)))])
@@ -122,6 +122,7 @@ fn tags() {
 
 #[test]
 fn build_by_kind() {
+    load_llvm_backend();
     let c = Target::new("c").unwrap();
     target::build("c", empty_module(), &c).unwrap();
     target::build("llvm", empty_module(), Target::new("llvm").unwrap()).unwrap();

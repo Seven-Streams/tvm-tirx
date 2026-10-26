@@ -266,14 +266,29 @@ impl Ramp {
         loc: impl Into<Location>,
     ) -> Result<Self> {
         let (base, stride, lanes) = (base.into_expr()?, stride.into_expr()?, lanes.into_expr()?);
-        let base_dtype = support::prim_dtype(&base)?;
-        let stride_dtype = support::prim_dtype(&stride)?;
+        let base_ty = support::prim_type(&base)?;
+        let stride_ty = support::prim_type(&stride)?;
         support::prim_dtype(&lanes)?;
-        if !support::is_scalar(base_dtype) {
-            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, "base_ty.IsScalar()", ""));
-        }
-        if !support::is_scalar(stride_dtype) {
-            return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, "stride_ty.IsScalar()", ""));
+        let (base_dtype, stride_dtype) = (base_ty.dtype, stride_ty.dtype);
+        // Only 32-bit and 64-bit integers step through the lanes of a ramp.
+        let index = |dtype: DLDataType| {
+            support::is_scalar(dtype)
+                && matches!(dtype.code, support::INT | support::UINT)
+                && matches!(dtype.bits, 32 | 64)
+        };
+        for (field, ty) in [("base", &base_ty), ("stride", &stride_ty)] {
+            if !index(ty.dtype) {
+                let condition = format!(
+                    "{field}_ty.IsScalar() && \
+                     {field}_ty.MatchesCode(DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt) && \
+                     ({field}_ty.bits() == 32 || {field}_ty.bits() == 64)"
+                );
+                let message = format!(
+                    "Ramp {field} must be scalar int32, int64, uint32, or uint64, but got {}",
+                    support::repr(ty)
+                );
+                return Err(support::check_failed(tvm_ffi::TYPE_ERROR, &condition, &message));
+            }
         }
         let stride = match stride_dtype == base_dtype {
             true => stride,

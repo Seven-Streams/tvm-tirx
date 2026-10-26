@@ -28,10 +28,11 @@ mod llvm;
 use tvm_tirx::codegen;
 use tvm_tirx::target::Target;
 
-use common::empty_module;
+use common::{empty_module, load_llvm_backend};
 
 #[test]
 fn build_module() {
+    load_llvm_backend();
     let module = empty_module();
     codegen::build_module(&module, Target::new("llvm").unwrap()).unwrap();
     codegen::build_module(&module, Target::new("c").unwrap()).unwrap();

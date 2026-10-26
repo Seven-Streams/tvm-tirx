@@ -687,7 +687,7 @@ pub fn cast_at(
         // Casting the base and the stride is valid only when every lane is the same integer in
         // both types: widening must not remove an overflow of the source, and a floating-point
         // cast need not be affine.
-        let integer = matches!(to.code, support::INT | support::UINT);
+        let integer = matches!(to.code, support::INT | support::UINT) && matches!(to.bits, 32 | 64);
         if let (Some(base), Some(stride)) =
             (const_fold::int(&ramp.base_), const_fold::int(&ramp.stride))
         {

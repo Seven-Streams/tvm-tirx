@@ -55,6 +55,8 @@ fn vector_nodes_agree_with_cpp() {
     let _serial = serial();
     let x = Expr::from(var("x", PrimType::int(32)));
     let x64 = Expr::from(var("x64", PrimType::int(64)));
+    let x16 = Expr::from(var("x16", PrimType::int(16)));
+    let u32 = Expr::from(var("u32", PrimType::uint(32)));
     let v4 = Expr::from(var("v", PrimType::int(32).with_lanes(4).unwrap()));
     let bf = Expr::from(var("bf", PrimType::bfloat(32)));
     let f = Expr::from(var("f", PrimType::float(32)));
@@ -82,7 +84,10 @@ fn vector_nodes_agree_with_cpp() {
         ("Ramp", x.clone(), Expr::from(1), lanes_4.clone()),
         ("Ramp(int64 lanes)", x.clone(), Expr::from(1), IntImm::int64(4).into()),
         ("Ramp(int64 stride constant)", x.clone(), IntImm::int64(2).into(), lanes_4.clone()),
-        ("Ramp(float stride constant)", f.clone(), Expr::from(2), lanes_4.clone()),
+        ("Ramp(uint32 base)", u32.clone(), Expr::from(1), lanes_4.clone()),
+        ("Ramp(int16 base)", x16.clone(), Expr::from(1), lanes_4.clone()),
+        ("Ramp(int16 stride)", x.clone(), x16.clone(), lanes_4.clone()),
+        ("Ramp(float base)", f.clone(), Expr::from(2), lanes_4.clone()),
         ("Ramp(int32 to int64 stride constant)", x64.clone(), Expr::from(-3), lanes_4.clone()),
         ("Ramp(int64 stride)", x.clone(), x64.clone(), lanes_4.clone()),
         ("Ramp(int stride of float base)", f.clone(), x.clone(), lanes_4.clone()),

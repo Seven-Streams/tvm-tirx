@@ -769,13 +769,15 @@ fn cast_folds_and_broadcasts_as_cpp() {
         (Expr::from(&x), "int32x4"),
         (Expr::from(&f), "int32x4"),
         (imm("int32", 3), "int64x4"),
-        // A broadcast is cast element by element, and so is a ramp of constants cast to an
-        // integer type when every lane fits both types; any other ramp becomes a `Cast` node.
+        // A broadcast is cast element by element, and so is a ramp of constants cast to a 32-bit
+        // or 64-bit integer type when every lane fits both types; any other ramp becomes a `Cast`
+        // node.
         (Broadcast::new(&f, 4, UNKNOWN_LOC).unwrap().into(), "int32x4"),
         (constant.clone(), "int64x4"),
         (overflowing.clone(), "int64x4"),
         (ramp(x.clone().into()), "int64x4"),
         (constant.clone(), "float32x4"),
+        (constant.clone(), "int16x4"),
     ];
     for (value, name) in &cases {
         assert!(same(value.cast(prim(name)), &native_cast(value, name)), "{name}");
@@ -790,6 +792,7 @@ fn cast_folds_and_broadcasts_as_cpp() {
     assert!(node(&overflowing, "int64x4").as_node::<CastObj>().is_some());
     assert!(node(&ramp(x.clone().into()), "int64x4").as_node::<CastObj>().is_some());
     assert!(node(&constant, "float32x4").as_node::<CastObj>().is_some());
+    assert!(node(&constant, "int16x4").as_node::<CastObj>().is_some());
     let raw: Expr = Cast::new(PrimType::int(64), &x, UNKNOWN_LOC).unwrap().into();
     assert!(same(x.cast(PrimType::int(64)), &raw));
 

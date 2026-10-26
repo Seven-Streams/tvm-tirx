@@ -21,13 +21,14 @@
 
 #![allow(dead_code)]
 
+use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
 use std::mem::size_of;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, Once};
 
 use tvm_tirx::ir::{BaseFunc, Expr, GlobalInfo, GlobalVar, IRModule, MissingTypeObj, PrimTypeObj};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::{TVMFFIGetTypeInfo, TVMFFITypeInfo};
 use tvm_tirx::tvm_ffi::{
-    Any, AnyCompatible, AnyView, Array, Function, Map, ObjectCore, ObjectRefCore, Result,
+    Any, AnyCompatible, AnyView, Array, Function, Map, Module, ObjectCore, ObjectRefCore, Result,
     String as FfiString,
 };
 
@@ -37,6 +38,25 @@ use tvm_tirx::tvm_ffi::{
 pub fn serial() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Load the LLVM backend library, which registers the `codegen.llvm_*` functions and the `llvm`
+/// target build, as `import tvm_tirx` does. It sits beside `libtvm_tirx_compiler`, whose directory
+/// the build script puts on the loader path; a build with `TVM_TIRX_LLVM_NATIVE_ONLY` names it
+/// `tvm_tirx_llvm_backend_native`.
+pub fn load_llvm_backend() {
+    static LOAD: Once = Once::new();
+    LOAD.call_once(|| {
+        let mut errors = Vec::new();
+        for name in ["tvm_tirx_llvm_backend", "tvm_tirx_llvm_backend_native"] {
+            match Module::load_from_file(format!("{DLL_PREFIX}{name}{DLL_SUFFIX}")) {
+                // Unloading the library would unregister its functions.
+                Ok(backend) => return std::mem::forget(backend),
+                Err(err) => errors.push(err.to_string()),
+            }
+        }
+        panic!("could not load the LLVM backend: {}", errors.join("\n"));
+    });
 }
 
 pub fn global(name: &str) -> Function {

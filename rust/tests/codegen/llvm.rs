@@ -22,8 +22,11 @@
 use tvm_tirx::codegen::{self, llvm};
 use tvm_tirx::target::Target;
 
+use crate::common::load_llvm_backend;
+
 #[test]
 fn llvm_queries() {
+    load_llvm_backend();
     assert!(llvm::version_major().unwrap() >= 10);
     let sqrt = llvm::lookup_intrinsic_id("llvm.sqrt").unwrap();
     assert!(sqrt > 0);
