@@ -30,7 +30,6 @@ name = "tvm_tirx"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-linkme = "0.3"
 tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
 
 # A library of operators and a type defined in Rust, which `tests/python/ir/test_op_rust.py` loads.

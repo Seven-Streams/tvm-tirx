@@ -17,16 +17,16 @@
  * under the License.
  */
 
-//! Registering IR types from Rust: the [`register_types!`](crate::register_types) blocks that
-//! define `rs_class` types, as C++ defines types with `refl::ObjectDef` in a
-//! `TVM_FFI_STATIC_INIT_BLOCK`, and the [`Placeholder`] values of their fields.
+//! Registering IR types from Rust: [`register_type`], which a [`tvm_ffi::static_init_block!`]
+//! calls for an `rs_class` type, as C++ registers a type with `refl::ObjectDef` in a
+//! `TVM_FFI_STATIC_INIT_BLOCK`, and the [`Placeholder`] values of its fields.
 //!
 //! `rs_class` registers the fields of a type, but not a way to make one. C++ `refl::ObjectDef`
 //! also registers a creator of an empty object, which tvm-ffi fills through the reflection of the
 //! fields to construct the type from Python (the `__ffi_init__` it generates) and to read it from
-//! a JSON graph. A Rust object cannot be empty, as its references are not null, so a block
-//! registers `__ffi_new__`, which makes an object whose fields hold [`Placeholder`]s, and tvm-ffi
-//! then sets each field as it sets those of a C++ object.
+//! a JSON graph. A Rust object cannot be empty, as its references are not null, so
+//! [`register_type`] registers `__ffi_new__`, which makes an object whose fields hold
+//! [`Placeholder`]s, and tvm-ffi then sets each field as it sets those of a C++ object.
 
 use tvm_ffi::tvm_ffi_sys::{TVMFFIByteArray, TVMFFITypeRegisterAttr};
 use tvm_ffi::{Any, AnyCompatible, Array, Function, ObjectCore, ObjectRefCore, Result, String};
@@ -36,11 +36,12 @@ use super::location::Location;
 use super::r#type::{MissingType, PrimType, Type, TypeObj};
 use super::support;
 
-/// A valid value of a field type, which an object of a [`register_types!`](crate::register_types)
-/// block holds until reflection sets the field: `__ffi_new__` makes an object with one in every
-/// field, and a field `__ffi_init__` does not take (`#[reflect(init_off)]`) keeps it. A block
-/// implements it for the objects and references it defines, and this crate for the common field
-/// types; implement it for a field type of your own crate.
+/// A valid value of a field type, which an object of a type [`register_type`] registers holds
+/// until reflection sets the field: `__ffi_new__` makes an object with one in every field, and a
+/// field `__ffi_init__` does not take (`#[reflect(init_off)]`) keeps it. The object of a type you
+/// register implements it, from the placeholders of its parent's object and its fields; this
+/// crate implements it for the common field types, and a field type of your own crate implements
+/// it too.
 pub trait Placeholder {
     /// The value.
     fn placeholder() -> Self;
@@ -106,18 +107,59 @@ impl Placeholder for Expr {
     }
 }
 
-/// Register the type of the reference `R` of a [`register_types!`](crate::register_types) block:
-/// `__ffi_new__`, then the `__ffi_init__` tvm-ffi generates from the reflected fields, then, once
-/// the Python receiver is available, request its constructor in registered destinations
-/// (`ir.expose_type`).
-/// An absent receiver is a no-op; an installed receiver's error is returned.
-#[doc(hidden)]
-pub fn __register_type<R>() -> Result<()>
+/// Register the IR type of the reference `R`, an `rs_class` type, as C++ registers one with
+/// `refl::ObjectDef`: `__ffi_new__`, from the [`Placeholder`] of the object, then the
+/// `__ffi_init__` tvm-ffi generates from the reflected fields, then, when the receiver is
+/// installed, a request for its constructor in registered destinations (`ir.expose_type`); an
+/// absent receiver is a no-op, and an installed receiver's error is returned. With an explicitly
+/// declared `my_ext` type API destination, Python then constructs the type from its fields,
+/// `my_ext.Pair(T.int32, second=T.float32)`, as it constructs a C++ type, and a JSON graph holds
+/// it. Import `tvm_tirx` before loading the library so exposure requests reach Python. Import the
+/// extension module in Python scope, or supply it to text parsing through imports, `extra_vars` or
+/// explicit parser namespace registration; type exposure does not add parser defaults.
+///
+/// Call it in a [`tvm_ffi::static_init_block!`], with the [`OpDef`](crate::ir::OpDef) chains of
+/// the operators, so that the type is registered when its program or library loads, as a C++ one
+/// is; the type's struct, reference and `impl`s are written outside the block, as any other:
+///
+/// ```no_run
+/// use tvm_tirx::ir::{register_type, Location, Placeholder, Type, TypeObj};
+/// use tvm_tirx::tvm_ffi::{self, def_object_ref, rs_class, ObjectRefCore};
+///
+/// /// The type of a pair of values, printed as `my_ext.Pair(first, second)`.
+/// #[rs_class("my_ext.PairType", final)]
+/// pub struct PairTypeObj {
+///     base: TypeObj,
+///     pub first: Type,
+///     #[reflect(kw_only)]
+///     pub second: Type,
+/// }
+/// def_object_ref!(pub PairType, Type, PairTypeObj);
+///
+/// impl Placeholder for PairTypeObj {
+///     fn placeholder() -> Self {
+///         Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
+///     }
+/// }
+///
+/// impl PairType {
+///     pub fn new(first: impl Into<Type>, second: impl Into<Type>) -> Self {
+///         PairTypeObj::new(TypeObj::new(Location::unknown()), first, second).into()
+///     }
+/// }
+///
+/// tvm_ffi::static_init_block! {
+///     register_type::<PairType>()?;
+/// }
+/// ```
+pub fn register_type<R>() -> Result<()>
 where
-    R: ObjectRefCore + AnyCompatible + Placeholder + 'static,
+    R: ObjectRefCore + AnyCompatible + From<R::ContainerType> + 'static,
+    R::ContainerType: Placeholder,
 {
     let type_index = R::ContainerType::type_index();
-    let new = Function::from_typed(|| -> Result<R> { Ok(R::placeholder()) });
+    let new =
+        Function::from_typed(|| -> Result<R> { Ok(R::from(R::ContainerType::placeholder())) });
     register_type_attr(type_index, "__ffi_new__", Any::from(new))?;
     tvm_ffi::cached_global_func!("ffi._RegisterFFIInit").call_tuple((type_index,))?;
     if let Ok(expose) = Function::get_global("ir.expose_type") {
@@ -133,87 +175,4 @@ fn register_type_attr(type_index: i32, name: &str, mut value: Any) -> Result<()>
     tvm_ffi::check_safe_call!(unsafe {
         TVMFFITypeRegisterAttr(type_index, &name, Any::as_data_ptr(&mut value))
     })
-}
-
-/// Define IR types as C++ does with `refl::ObjectDef` in a `TVM_FFI_STATIC_INIT_BLOCK`: each item
-/// is an `rs_class` object struct and the `def_object_ref!` of its reference, written as outside a
-/// block.
-///
-/// ```no_run
-/// use tvm_tirx::ir::{Type, TypeObj};
-/// use tvm_tirx::tvm_ffi::{self, rs_class};
-///
-/// tvm_tirx::register_types! {
-///     /// The type of a pair of values, printed as `my_ext.Pair(first, second)`.
-///     #[rs_class("my_ext.PairType", final)]
-///     pub struct PairTypeObj {
-///         base: TypeObj,
-///         pub first: Type,
-///         #[reflect(kw_only)]
-///         pub second: Type,
-///     }
-///     def_object_ref!(pub PairType, Type, PairTypeObj);
-/// }
-///
-/// ```
-///
-/// The block registers its types when its program or library loads, as a
-/// [`register_ops!`](crate::register_ops) block registers its operators, and once per process.
-/// With an explicitly declared `my_ext` type API destination, Python constructs a type from its
-/// fields as `my_ext.Pair(T.int32, second=T.float32)`, like a C++ type, and a JSON graph holds it.
-/// Import `tvm_tirx` before loading the library so exposure requests reach Python. Import the
-/// extension module in Python scope, or supply it to text parsing through imports, `extra_vars`
-/// or explicit parser namespace registration; type exposure does not add parser defaults.
-/// The type of each field and the parent's object implement [`Placeholder`].
-#[macro_export]
-macro_rules! register_types {
-    ($(
-        $(#[$attr:meta])*
-        $vis:vis struct $obj:ident {
-            $base:ident: $base_ty:ty
-            $(, $(#[$field_attr:meta])* $field_vis:vis $field:ident: $field_ty:ty)* $(,)?
-        }
-        def_object_ref!($ref_vis:vis $ref:ident, $parent:ty, $ref_obj:ident $(,)?);
-    )*) => {
-        $(
-            $(#[$attr])*
-            $vis struct $obj {
-                $base: $base_ty,
-                $($(#[$field_attr])* $field_vis $field: $field_ty,)*
-            }
-
-            $crate::tvm_ffi::def_object_ref!($ref_vis $ref, $parent, $ref_obj);
-
-            impl $crate::ir::Placeholder for $obj {
-                fn placeholder() -> Self {
-                    $obj::new(
-                        <$base_ty as $crate::ir::Placeholder>::placeholder(),
-                        $(<$field_ty as $crate::ir::Placeholder>::placeholder(),)*
-                    )
-                }
-            }
-
-            impl $crate::ir::Placeholder for $ref {
-                fn placeholder() -> Self {
-                    <$obj as $crate::ir::Placeholder>::placeholder().into()
-                }
-            }
-        )*
-
-        $crate::__register_block!(
-            "register_types!",
-            stringify!($(
-                $(#[$attr])*
-                $vis struct $obj {
-                    $base: $base_ty
-                    $(, $(#[$field_attr])* $field_vis $field: $field_ty)*
-                }
-                def_object_ref!($ref_vis $ref, $parent, $ref_obj);
-            )*),
-            || {
-                $($crate::ir::__register_type::<$ref>()?;)*
-                Ok(())
-            }
-        );
-    };
 }

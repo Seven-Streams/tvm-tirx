@@ -99,30 +99,44 @@
 //! `floordiv(&x + 1, 4)?` is the C++ `floordiv(x + 1, 4)`. An `Ex` passes into any function or
 //! constructor that takes an [`ir::IntoExpr`], as any expression does.
 //!
-//! Operators are defined from Rust in [`register_ops!`] blocks, as C++ defines them in a
-//! `TVM_FFI_STATIC_INIT_BLOCK`: each item is an [`ir::OpDef`] chain, the C++ `OpDef`, with the
-//! signature ([`ir::sig`], whose descriptors generate the validator), the attributes, by the keys
-//! of [`ir::op_attr`] and [`tirx::op_attr`], and the type inference, validator and region hooks as
-//! Rust functions, which C++ calls natively:
+//! Operators and types are defined from Rust in a [`tvm_ffi::static_init_block!`], as C++ defines
+//! them in a `TVM_FFI_STATIC_INIT_BLOCK`. An operator is an [`ir::OpDef`] chain, the C++ `OpDef`,
+//! with the signature ([`ir::sig`], whose descriptors generate the validator), the attributes, by
+//! the keys of [`ir::op_attr`] and [`tirx::op_attr`], and the type inference, validator and
+//! region hooks as Rust functions, which C++ calls natively; a type, written outside the block as
+//! any other ([Defining a type in Rust](#defining-a-type-in-rust)), is registered by
+//! [`ir::register_type`]:
 //!
 //! ```no_run
 //! use tvm_tirx::ir::op_attr::CALL_EFFECT_KIND;
 //! use tvm_tirx::ir::sig::{self, IntExpr};
-//! use tvm_tirx::ir::{CallEffectKind, CallObj, OpDef, OpHandle, Type};
-//! use tvm_tirx::tvm_ffi::Result;
+//! use tvm_tirx::ir::{register_type, CallEffectKind, CallObj, OpDef, OpHandle, Type};
+//! use tvm_tirx::tvm_ffi::{self, Result};
+//! # use tvm_tirx::ir::{Placeholder, TypeObj};
+//! # use tvm_tirx::tvm_ffi::{def_object_ref, rs_class, ObjectRefCore};
+//! # #[rs_class("my_ext.PairType", final)]
+//! # pub struct PairTypeObj { base: TypeObj, pub first: Type, pub second: Type }
+//! # def_object_ref!(pub PairType, Type, PairTypeObj);
+//! # impl Placeholder for PairTypeObj {
+//! #     fn placeholder() -> Self {
+//! #         Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
+//! #     }
+//! # }
 //!
 //! fn index_type(call: &CallObj) -> Result<Type> {
 //!     Ok(call.args.get(0)?.ty.clone())
 //! }
 //!
-//! tvm_tirx::register_ops! {
+//! tvm_ffi::static_init_block! {
 //!     OpDef::new("my_ext.clamp", "Clamp an index to the range `[0, bound)`.")
 //!         .signature((
 //!             sig::arg::<IntExpr>("index", "The index."),
 //!             sig::arg::<IntExpr>("bound", "The exclusive upper bound."),
 //!         ))
 //!         .set_infer_type(index_type)
-//!         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
+//!         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure)
+//!         .op()?;
+//!     register_type::<PairType>()?;
 //! }
 //!
 //! static CLAMP: OpHandle = OpHandle::new("my_ext.clamp");
@@ -130,8 +144,8 @@
 //!
 //! An [`ir::OpHandle`] in a `static` keeps an operator as C++ keeps one in `const Op& xxx_op()`.
 //! A block runs when its program or library loads, as a C++ one does, wherever in it the block
-//! is. Every library built on the crate exports [`ir::register_defined_ir`], which reports the
-//! errors of the blocks that failed, as the TVM FFI function `tirx_register_ir`.
+//! is. Every library built on the crate exports [`tvm_ffi::run_static_init_blocks`], which
+//! reports the errors of the blocks that failed, as the TVM FFI function `tirx_register_ir`.
 //!
 //! # The library Python loads
 //!
@@ -142,8 +156,8 @@
 //! crate defines by the time the import returns, as the C++ ones are, and calls `tirx_register_ir`
 //! to raise the error of a block that failed. Python uses the operators as it uses the C++ ones:
 //! `Op.get` finds them, a `Call` built in Python runs their hooks, and the TVMScript printer prints
-//! their calls. Completing an operator or a type of a [`register_types!`](crate::register_types)
-//! block requests API exposure through the `ir.expose_op` or `ir.expose_type` FFI receiver.
+//! their calls. Completing an operator with [`ir::OpDef::op`] or a type with [`ir::register_type`]
+//! requests API exposure through the `ir.expose_op` or `ir.expose_type` FFI receiver.
 //! Python installs these receivers before loading native libraries and publishes the selected
 //! definitions to registered destinations, including destinations initialized later. Op API
 //! destinations construct raw calls; script destinations add builder behavior. Type destinations
@@ -202,9 +216,10 @@
 //! The generated code names `tvm_ffi`, which `use tvm_tirx::tvm_ffi` brings into scope in a crate
 //! that depends only on `tvm-tirx`. The parent's object must have a public `new` and implement
 //! `ShallowCopy`; the bindings generate both for a complete type that is not final, as `ir.Type`.
-//! Written with its `def_object_ref!` in a [`register_types!`](crate::register_types) block, the
-//! type is also registered with the operators, so that Python constructs it from its fields and
-//! TVMScript parses it, as a C++ type.
+//! Registered by [`ir::register_type`] in a [`tvm_ffi::static_init_block!`], with the operators,
+//! the type is also constructed by Python from its fields and parsed by TVMScript, as a C++ type;
+//! its object must implement [`ir::Placeholder`], written from the placeholders of the parent's
+//! object and the fields.
 //!
 //! # Generated and hand-written code
 //!
@@ -305,13 +320,7 @@ pub mod tirx;
 
 pub use tvm_ffi;
 
-// The errors of the blocks of every library built on the crate, which `import tvm_tirx` raises for
-// `libtvm_tirx_rust`: `__tvm_ffi_tirx_register_ir`, the TVM FFI function `tirx_register_ir` of
-// the library as `tvm_ffi.load_module` loads it.
-tvm_ffi::tvm_ffi_dll_export_typed_func!(tirx_register_ir, ir::register_defined_ir);
-
-/// What the exported macros expand to.
-#[doc(hidden)]
-pub mod __private {
-    pub use linkme;
-}
+// The errors of the static init blocks of every library built on the crate, which
+// `import tvm_tirx` raises for `libtvm_tirx_rust`: `__tvm_ffi_tirx_register_ir`, the TVM FFI
+// function `tirx_register_ir` of the library as `tvm_ffi.load_module` loads it.
+tvm_ffi::tvm_ffi_dll_export_typed_func!(tirx_register_ir, tvm_ffi::run_static_init_blocks);

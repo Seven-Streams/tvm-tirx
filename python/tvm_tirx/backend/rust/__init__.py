@@ -37,8 +37,9 @@ def register_backend():
     except (OSError, FileNotFoundError, RuntimeError):
         pass
     else:
-        # Loading the library registers its operators and types, and keeps it, and their hooks,
-        # loaded for the process; ``tirx_register_ir`` raises the error of a block that failed.
+        # Loading the library runs its static init blocks, which register its operators and
+        # types, and keeps it, and their hooks, loaded for the process; ``tirx_register_ir``
+        # raises the error of a block that failed.
         tvm_ffi.load_module(_LOADED_LIBS["tvm_tirx_rust"]._name).tirx_register_ir()
     return None
 

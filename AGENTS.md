@@ -139,8 +139,8 @@ uv run --no-sync cargo test --manifest-path rust/Cargo.toml
 
 The editable install also builds the crate as `libtvm_tirx_rust` when it finds a
 cargo as new as the crate's `rust-version` (`TVM_TIRX_USE_RUST=AUTO`; rustup's
-cargo is preferred). `import tvm_tirx` loads it and registers the operators of its
-`register_ops!` blocks, so re-run the editable install after changing them.
+cargo is preferred). `import tvm_tirx` loads it and registers the operators and types
+of its static init blocks, so re-run the editable install after changing them.
 
 ## Linting
 

@@ -31,9 +31,10 @@
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr};
 use tvm_tirx::ir::{
-    CallEffectKind, CallObj, DictAttrs, Expr, OpDef, PrimType, Type, TypeObj, Var, UNKNOWN_LOC,
+    register_type, CallEffectKind, CallObj, DictAttrs, Expr, OpDef, Placeholder, PrimType, Type,
+    TypeObj, Var, UNKNOWN_LOC,
 };
-use tvm_tirx::tvm_ffi::{self, rs_class, Array, ObjectRefCast, Result};
+use tvm_tirx::tvm_ffi::{self, def_object_ref, rs_class, Array, ObjectRefCast, Result};
 
 fn first_arg_type(call: &CallObj) -> Result<Type> {
     Ok(call.args.get(0)?.ty.clone())
@@ -45,45 +46,54 @@ fn loop_index(call: &CallObj) -> Result<Array<Var>> {
     Ok(Array::new(vec![Var::new("i", ty, UNKNOWN_LOC)]))
 }
 
-tvm_tirx::register_ops! {
+// A type, which Python constructs from its fields, `T.ExamplePair(T.int32, T.float32)`, as it
+// constructs a C++ type. Its object makes the placeholder `__ffi_new__` fills.
+/// The type of a pair of values.
+#[rs_class("tirx.ExamplePairType", final)]
+pub struct ExamplePairTypeObj {
+    base: TypeObj,
+    pub first: Type,
+    pub second: Type,
+}
+def_object_ref!(pub ExamplePairType, Type, ExamplePairTypeObj);
+
+impl Placeholder for ExamplePairTypeObj {
+    fn placeholder() -> Self {
+        Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
+    }
+}
+
+tvm_ffi::static_init_block! {
     OpDef::new("tirx.example_clamp", "Clamp an index to the range `[0, bound)`.")
         .signature((
             sig::arg::<IntExpr>("index", "The index."),
             sig::arg::<IntExpr>("bound", "The exclusive upper bound."),
         ))
         .set_infer_type(first_arg_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure)
+        .op()?;
 
     // `Call.attrs` holds a `DictAttrs`; outside `tirx.`, the calls print as `my_ext.hint(..)`.
     OpDef::new("my_ext.hint", "Return the value, with hints for the code generator.")
         .signature((sig::arg::<Expr>("value", "The value."), sig::call_attrs::<DictAttrs>()))
         .set_infer_type(first_arg_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation);
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation)
+        .op()?;
 
     // A region operation, which binds an index in its body.
     OpDef::new("tirx.example_loop", "Run the body for each index in `[0, extent)`.")
         .signature(sig::arg::<IntExpr>("extent", "The number of iterations."))
-        .set_region_body_params(loop_index);
-}
+        .set_region_body_params(loop_index)
+        .op()?;
 
-// A type, which Python constructs from its fields, `T.ExamplePair(T.int32, T.float32)`, as it
-// constructs a C++ type.
-tvm_tirx::register_types! {
-    /// The type of a pair of values.
-    #[rs_class("tirx.ExamplePairType", final)]
-    pub struct ExamplePairTypeObj {
-        base: TypeObj,
-        pub first: Type,
-        pub second: Type,
-    }
-    def_object_ref!(pub ExamplePairType, Type, ExamplePairTypeObj);
+    register_type::<ExamplePairType>()?;
 }
 
 // A block can be anywhere in the library.
 mod effects {
     use super::*;
 
-    tvm_tirx::register_ops! {
+    tvm_ffi::static_init_block! {
         OpDef::new("tirx.example_mark", "
             Mark a point in the program.
 
@@ -91,6 +101,7 @@ mod effects {
         ")
             .signature(())
             .set_attr(FIXED_RETURN_TYPE, PrimType::void())
-            .set_attr(CALL_EFFECT_KIND, CallEffectKind::Opaque);
+            .set_attr(CALL_EFFECT_KIND, CallEffectKind::Opaque)
+            .op()?;
     }
 }

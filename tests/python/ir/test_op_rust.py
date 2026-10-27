@@ -268,7 +268,7 @@ def test_a_library_registers_its_operators_when_python_loads_it(define_ir_librar
         ROUND_TRIP,
         libraries=[define_ir_library, copy],
     )
-    assert "registering operators and types failed" not in stderr, stderr
+    assert "the static init block at" not in stderr, stderr
 
 
 def test_a_block_that_fails_when_its_library_loads_is_reported(define_ir_library):
@@ -295,5 +295,5 @@ def test_a_block_that_fails_when_its_library_loads_is_reported(define_ir_library
         """,
         libraries=[define_ir_library],
     )
-    assert "registering operators and types failed" in stderr, stderr
+    assert "the static init block at" in stderr, stderr
     assert "Operator tirx.example_mark is registered before" in stderr, stderr

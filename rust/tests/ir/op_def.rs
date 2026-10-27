@@ -17,10 +17,10 @@
  * under the License.
  */
 
-//! Tests of `ir::op_def`: operators registered from Rust, by an `OpDef` or in `register_ops!`
-//! blocks, which `register_defined_ir` or the first lookup through an `OpHandle` runs, are used by
+//! Tests of `ir::op_def`: operators registered from Rust, by an `OpDef` or in static init blocks,
+//! which run when the test binary loads or at the first lookup through an `OpHandle`, are used by
 //! the native registry, `Call` constructor and validation, and their type inference, validators
-//! and region contracts are native hooks.
+//! and region contracts are native hooks; and types registered with them.
 //!
 //! The registry does not synchronize registration, so the tests take `serial()`; the tests
 //! register operators of different names.
@@ -31,19 +31,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr, PrimExpr, PrimVar};
 use tvm_tirx::ir::{
-    register_defined_ir, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
-    FuncType, IntImm, Op, OpDef, OpHandle, PrimType, RegionStmt, RegionStmtObj, Registration,
-    StringImm, Type, Var, VarObj, REGISTRATIONS, UNKNOWN_LOC,
+    register_type, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
+    FuncType, IntImm, Op, OpDef, OpHandle, Placeholder, PrimType, RegionStmt, RegionStmtObj,
+    StringImm, Type, TypeObj, Var, VarObj, UNKNOWN_LOC,
 };
 use tvm_tirx::tirx::{CallFFIKernelAttr, TensorVar};
+use tvm_tirx::tvm_ffi::static_init::{StaticInitBlock, STATIC_INIT_BLOCKS};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 use tvm_tirx::tvm_ffi::{
-    Any, AnyView, Array, Error, ErrorKind, Function, Map, ObjectCore, ObjectRefCast, ObjectRefCore,
-    Result, String as FfiString, ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
+    self, def_object_ref, rs_class, run_static_init_blocks, Any, AnyView, Array, Error, ErrorKind,
+    Function, Map, ObjectCore, ObjectRefCast, ObjectRefCore, Result, String as FfiString,
+    ATTRIBUTE_ERROR, INTERNAL_ERROR, TYPE_ERROR, VALUE_ERROR,
 };
 
 use super::{int32, parse_dtype, tensor_var};
-use types::{BlockType, BlockTypeObj};
 use crate::common::{global, serial, structural_equal};
 
 fn var(name: &str, dtype: &str) -> Var {
@@ -413,7 +414,23 @@ fn accept(_call: &CallObj) -> Result<()> {
     Ok(())
 }
 
-tvm_tirx::register_ops! {
+/// A type and a count, registered with the operators when the test binary loads.
+#[rs_class("rust_test.BlockType", final)]
+pub struct BlockTypeObj {
+    base: TypeObj,
+    pub elem: Type,
+    #[reflect(kw_only)]
+    pub count: i64,
+}
+def_object_ref!(pub BlockType, Type, BlockTypeObj);
+
+impl Placeholder for BlockTypeObj {
+    fn placeholder() -> Self {
+        Self::new(TypeObj::placeholder(), Type::placeholder(), i64::placeholder())
+    }
+}
+
+tvm_ffi::static_init_block! {
     OpDef::new("rust_test.defined_identity", "
         Return the value.
 
@@ -421,73 +438,61 @@ tvm_tirx::register_ops! {
     ")
         .signature(sig::arg::<Expr>("value", "The value."))
         .set_infer_type(identity_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation);
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation)
+        .op()?;
 
     // `tirx.launch_thread`'s region contract (`src/tirx/op/region.cc`), written in Rust: one
     // thread index of the extent's type.
     OpDef::new("rust_test.launch", "Bind a thread index below an extent.")
         .signature((sig::arg::<StringImm>("tag", ""), sig::arg::<IntExpr>("extent", "")))
         .set_region_body_params(launch_body_params)
-        .set_region_validate(no_results_or_attributes);
+        .set_region_validate(no_results_or_attributes)
+        .op()?;
 
     OpDef::new("rust_test.panicking_region", "")
-        .set_region_body_params(|_: &CallObj| -> Result<Array<Var>> { panic!("hook bug") });
+        .set_region_body_params(|_: &CallObj| -> Result<Array<Var>> { panic!("hook bug") })
+        .op()?;
+
+    register_type::<BlockType>()?;
 }
 
 mod elsewhere {
     use super::*;
 
-    tvm_tirx::register_ops! {
+    tvm_ffi::static_init_block! {
         OpDef::new("rust_test.defined_elsewhere", "An operator in another module.")
-            .set_attr(FIXED_RETURN_TYPE, PrimType::void());
+            .set_attr(FIXED_RETURN_TYPE, PrimType::void())
+            .op()?;
     }
 }
 
-// A type of a `register_types!` block, registered with the operators when the test binary loads.
-mod types {
-    use tvm_tirx::ir::{Type, TypeObj};
-    use tvm_tirx::tvm_ffi::{self, rs_class};
-
-    tvm_tirx::register_types! {
-        /// A type and a count.
-        #[rs_class("rust_test.BlockType", final)]
-        pub struct BlockTypeObj {
-            base: TypeObj,
-            pub elem: Type,
-            #[reflect(kw_only)]
-            pub count: i64,
-        }
-        def_object_ref!(pub BlockType, Type, BlockTypeObj);
-    }
-}
-
-// Two blocks that fail, which `register_defined_ir` reports together while it runs the others: a
+// Two blocks that fail, which `run_static_init_blocks` reports together while it runs the others: a
 // name C++ registers, and a second custom validator, after which the block stops.
 mod failing {
     use super::*;
 
-    tvm_tirx::register_ops! {
-        OpDef::new("tirx.launch_thread", "");
+    tvm_ffi::static_init_block! {
+        OpDef::new("tirx.launch_thread", "").op()?;
     }
 
-    tvm_tirx::register_ops! {
-        OpDef::new("rust_test.defined_broken", "").set_validator(accept).set_validator(accept);
-        OpDef::new("rust_test.after_broken", "");
+    tvm_ffi::static_init_block! {
+        OpDef::new("rust_test.defined_broken", "").set_validator(accept).set_validator(accept).op()?;
+        OpDef::new("rust_test.after_broken", "").op()?;
     }
 }
 
-/// The blocks of `module` in this test binary.
-fn blocks_of(module: &str) -> Vec<&'static Registration> {
+/// The static init blocks of `module` in this test binary.
+fn blocks_of(module: &str) -> Vec<&'static StaticInitBlock> {
     let prefix = format!("ir::op_def{module}:");
     let of_module = |identity: &str| {
         identity
             .strip_prefix(&prefix)
             .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
     };
-    REGISTRATIONS.iter().filter(|block| of_module(&block.identity())).collect()
+    STATIC_INIT_BLOCKS.iter().filter(|block| of_module(&block.identity())).collect()
 }
 
-fn is_block_registered(block: &Registration) -> bool {
+fn is_block_registered(block: &StaticInitBlock) -> bool {
     Function::get_global(&block.marker()).is_ok()
 }
 
@@ -559,7 +564,7 @@ fn region(
 }
 
 #[test]
-fn register_ops_blocks_define_operators() {
+fn static_init_blocks_define_operators_and_types() {
     let _serial = serial();
 
     // The blocks ran when the test binary loaded; a block that fails does not keep the others from
@@ -575,11 +580,11 @@ fn register_ops_blocks_define_operators() {
     let fixed = Op::attr_map::<Type>("TFixedReturnType").unwrap().unwrap();
     assert!(structural_equal(&fixed.get(&elsewhere).unwrap().unwrap(), &PrimType::void()));
 
-    // `register_defined_ir` reports the blocks that failed together, each with its first error;
+    // `run_static_init_blocks` reports the blocks that failed together, each with its first error;
     // a block stops at its first failure, and a failed block does not run again.
-    let error = register_defined_ir().unwrap_err();
+    let error = run_static_init_blocks().unwrap_err();
     let message = error.message();
-    assert!(message.starts_with("2 register_ops! blocks failed:"), "{message}");
+    assert!(message.starts_with("2 static init blocks failed:"), "{message}");
     assert!(message.contains("op_def::failing:"), "{message}");
     assert!(
         message.contains("ValueError: Validator of rust_test.defined_broken is already registered"),
@@ -588,10 +593,10 @@ fn register_ops_blocks_define_operators() {
     assert!(message.contains("AttributeError: "), "{message}");
     assert!(message.contains("is registered before"), "{message}");
     assert!(Op::get("rust_test.after_broken").is_err(), "the block stopped");
-    assert_eq!(register_defined_ir().unwrap_err().message(), message);
+    assert_eq!(run_static_init_blocks().unwrap_err().message(), message);
 
-    // The type of a `register_types!` block is registered with them: tvm-ffi constructs it from its
-    // fields, positionally or by keyword, and reads it back from a JSON graph.
+    // The type `register_type` registers with them: tvm-ffi constructs it from its fields,
+    // positionally or by keyword, and reads it back from a JSON graph.
     let init = Function::from_type_attr(BlockTypeObj::type_index(), "__ffi_init__").unwrap();
     let kwargs = global("ffi.GetKwargsObject").call_tuple(()).unwrap();
     let (elem, count, four) = (Type::from(PrimType::int(32)), FfiString::from("count"), 4i64);
@@ -637,7 +642,7 @@ fn register_ops_blocks_define_operators() {
     assert_error(
         UNREGISTERED.get(),
         ATTRIBUTE_ERROR,
-        "Operator rust_test.unregistered is not registered\n2 register_ops! blocks failed:",
+        "Operator rust_test.unregistered is not registered\n2 static init blocks failed:",
     );
     assert!(!UNREGISTERED.is(&call.op));
 
@@ -693,51 +698,4 @@ fn register_ops_blocks_define_operators() {
         UNKNOWN_LOC,
     );
     assert!(built.is_err(), "a panicking hook fails the constructor");
-}
-
-#[test]
-fn a_block_another_library_registered_is_skipped() {
-    let _serial = serial();
-    fn register() -> Result<()> {
-        OpDef::new("rust_test.registered_once", "").op()?;
-        Ok(())
-    }
-    // One block in two libraries, as one of a crate both link.
-    let text = r#"OpDef::new("rust_test.registered_once", "")"#;
-    let block = || Registration::__new("register_ops!", "ext::shared", 3, "0.1.0", text, register);
-    let (first, second) = (block(), block());
-    assert_eq!(first.marker(), second.marker());
-
-    // The first library registers the operator and marks the block; the second skips it, where
-    // registering the name again would fail.
-    first.register().unwrap();
-    assert!(is_block_registered(&first));
-    let op = Op::get("rust_test.registered_once").unwrap();
-    second.register().unwrap();
-    assert!(Op::get("rust_test.registered_once").unwrap().same_as(&op));
-
-    // Another version of the crate is another block, whose name is already registered.
-    let other = Registration::__new("register_ops!", "ext::shared", 3, "0.2.0", text, register);
-    assert!(other.register().unwrap_err().message().contains("is registered before"));
-}
-
-#[test]
-fn register_ops_block_identity_is_its_crate_version_and_text() {
-    fn register() -> Result<()> {
-        Ok(())
-    }
-    let identity = |version, text| {
-        Registration::__new("register_ops!", "ext::ops", 7, version, text, register)
-    };
-    let text = r#"OpDef::new("ext.clamp", "Clamp.").set_infer_type(first_arg_type)"#;
-    let block = identity("0.1.0", text).identity();
-    assert!(block.starts_with("ext::ops:7@0.1.0#"), "{block}");
-
-    // The same block in another library, whose compiler may space the tokens otherwise.
-    let spaced = "OpDef :: new(\"ext.clamp\", \"Clamp.\")\n    . set_infer_type(first_arg_type)";
-    assert_eq!(identity("0.1.0", spaced).identity(), block);
-    // A block of another version of the crate, or whose text differs, is another block.
-    assert_ne!(identity("0.1.1", text).identity(), block);
-    let renamed = text.replace("ext.clamp", "ext.clip");
-    assert_ne!(identity("0.1.0", &renamed).identity(), block);
 }
