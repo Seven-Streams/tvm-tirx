@@ -17,7 +17,7 @@
  * under the License.
  */
 
-//! Tests of `ir::op_def`: operators registered from Rust, by an `OpDef` or in `register_ops!`
+//! Tests of `tvm_tirx_ext`: operators registered from Rust, by an `OpDef` or in `register_ops!`
 //! blocks, which `register_defined_ir` or the first lookup through an `OpHandle` runs, are used by
 //! the native registry, `Call` constructor and validation, and their type inference, validators
 //! and region contracts are native hooks.
@@ -29,13 +29,13 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
-use tvm_tirx::ir::sig::{self, IntExpr, PrimExpr, PrimVar};
+use tvm_tirx_ext::sig::{self, IntExpr, PrimExpr, PrimVar, TensorVar};
 use tvm_tirx::ir::{
-    register_defined_ir, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
-    FuncType, IntImm, Op, OpDef, OpHandle, PrimType, RegionStmt, RegionStmtObj, Registration,
-    StringImm, Type, Var, VarObj, REGISTRATIONS, UNKNOWN_LOC,
+    AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr, FuncType, IntImm, Op,
+    PrimType, RegionStmt, RegionStmtObj, StringImm, Type, Var, VarObj, UNKNOWN_LOC,
 };
-use tvm_tirx::tirx::{CallFFIKernelAttr, TensorVar};
+use tvm_tirx::tirx::CallFFIKernelAttr;
+use tvm_tirx_ext::{register_defined_ir, OpDef, OpHandle, Registration, REGISTRATIONS};
 use tvm_tirx::tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 use tvm_tirx::tvm_ffi::{
     Any, AnyView, Array, Error, ErrorKind, Function, Map, ObjectCore, ObjectRefCast, ObjectRefCore,
@@ -413,7 +413,7 @@ fn accept(_call: &CallObj) -> Result<()> {
     Ok(())
 }
 
-tvm_tirx::register_ops! {
+tvm_tirx_ext::register_ops! {
     OpDef::new("rust_test.defined_identity", "
         Return the value.
 
@@ -437,7 +437,7 @@ tvm_tirx::register_ops! {
 mod elsewhere {
     use super::*;
 
-    tvm_tirx::register_ops! {
+    tvm_tirx_ext::register_ops! {
         OpDef::new("rust_test.defined_elsewhere", "An operator in another module.")
             .set_attr(FIXED_RETURN_TYPE, PrimType::void());
     }
@@ -448,7 +448,7 @@ mod types {
     use tvm_tirx::ir::{Type, TypeObj};
     use tvm_tirx::tvm_ffi::{self, rs_class};
 
-    tvm_tirx::register_types! {
+    tvm_tirx_ext::register_types! {
         /// A type and a count.
         #[rs_class("rust_test.BlockType", final)]
         pub struct BlockTypeObj {
@@ -466,11 +466,11 @@ mod types {
 mod failing {
     use super::*;
 
-    tvm_tirx::register_ops! {
+    tvm_tirx_ext::register_ops! {
         OpDef::new("tirx.launch_thread", "");
     }
 
-    tvm_tirx::register_ops! {
+    tvm_tirx_ext::register_ops! {
         OpDef::new("rust_test.defined_broken", "").set_validator(accept).set_validator(accept);
         OpDef::new("rust_test.after_broken", "");
     }
@@ -478,7 +478,7 @@ mod failing {
 
 /// The blocks of `module` in this test binary.
 fn blocks_of(module: &str) -> Vec<&'static Registration> {
-    let prefix = format!("ir::op_def{module}:");
+    let prefix = format!("ext::op{module}:");
     let of_module = |identity: &str| {
         identity
             .strip_prefix(&prefix)
@@ -580,7 +580,7 @@ fn register_ops_blocks_define_operators() {
     let error = register_defined_ir().unwrap_err();
     let message = error.message();
     assert!(message.starts_with("2 register_ops! blocks failed:"), "{message}");
-    assert!(message.contains("op_def::failing:"), "{message}");
+    assert!(message.contains("ext::op::failing:"), "{message}");
     assert!(
         message.contains("ValueError: Validator of rust_test.defined_broken is already registered"),
         "{message}"

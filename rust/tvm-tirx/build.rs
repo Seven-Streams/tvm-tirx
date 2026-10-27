@@ -19,7 +19,8 @@
 //! Links `libtvm_tirx_compiler` from the directory `tvm-tirx-config --libdir` prints, as
 //! `tvm-ffi-sys` links libtvm_ffi from the one `tvm-ffi-config --libdir` prints. The loader-path
 //! environment `tvm-ffi-sys` emits only applies to its own package, so this script emits it again
-//! for both directories, so that a plain `cargo test` finds the libraries at startup.
+//! for both directories, so that a plain `cargo test` finds the libraries at startup, and passes it
+//! on to the build scripts of the crates that depend on this one.
 
 use std::env;
 use std::path::Path;
@@ -92,5 +93,11 @@ fn main() {
             dirs.insert(0, prev);
         }
     }
-    println!("cargo:rustc-env={loader_var}={}", dirs.join(sep));
+    let loader_path = dirs.join(sep);
+    println!("cargo:rustc-env={loader_var}={loader_path}");
+    // For the build scripts of the crates that depend on this one (`links = "tvm_tirx_compiler"`):
+    // `DEP_TVM_TIRX_COMPILER_LOADER_VAR` and `DEP_TVM_TIRX_COMPILER_LOADER_PATH`, so that their
+    // tests find the libraries too.
+    println!("cargo:loader_var={loader_var}");
+    println!("cargo:loader_path={loader_path}");
 }

@@ -16,11 +16,11 @@
 # under the License.
 """Operators defined in Rust are registered when their library loads, as C++ ones are.
 
-``rust/examples/define_ir.rs`` is built by cargo into a library of its own, which a fresh
-interpreter loads, as ``import tvm_tirx`` loads libtvm_tirx_rust, and then uses its operators as it
-uses C++ ones: registering them also gives them their TVMScript builders. Its type is registered
-with them. A copy of the library is a second library with the same blocks, as libraries that link
-the same crate have.
+``rust/tvm-tirx-ext/examples/define_ir.rs`` is built by cargo into a library of its own, which a
+fresh interpreter loads, as ``import tvm_tirx`` loads libtvm_tirx_rust, and then uses its operators
+as it uses C++ ones: registering them also gives them their TVMScript builders. Its type is
+registered with them. A copy of the library is a second library with the same blocks, as libraries
+that link the same crate have.
 """
 
 import os
@@ -38,7 +38,7 @@ RUST_DIR = Path(__file__).resolve().parents[3] / "rust"
 
 
 def find_cargo():
-    """A cargo as new as the crate's rust-version, rustup's first, as the CMake build looks."""
+    """A cargo as new as the workspace's rust-version, rustup's first, as the CMake build looks."""
     manifest = (RUST_DIR / "Cargo.toml").read_text()
     needed = re.search(r'^rust-version *= *"([0-9.]+)"', manifest, re.M).group(1)
     needed = tuple(int(part) for part in needed.split("."))
@@ -64,9 +64,8 @@ def define_ir_library():
             "tvm-tirx-config on PATH"
         )
     manifest = RUST_DIR / "Cargo.toml"
-    subprocess.run(
-        [cargo, "build", "--manifest-path", str(manifest), "--example", "define_ir"], check=True
-    )
+    command = [cargo, "build", "--manifest-path", str(manifest), "--package", "tvm-tirx-ext"]
+    subprocess.run([*command, "--example", "define_ir"], check=True)
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", RUST_DIR / "target"))
     name = {"darwin": "libdefine_ir.dylib", "win32": "define_ir.dll"}.get(
         sys.platform, "libdefine_ir.so"

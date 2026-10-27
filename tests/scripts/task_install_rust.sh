@@ -18,8 +18,8 @@
 
 set -euxo pipefail
 
-# Install the toolchain of the crate's rust-version, which the CI images do not have, for the build
-# and the tests of rust/. Source it from the repository root.
+# Install the toolchain of the rust-version of the workspace in rust/, which the CI images do not
+# have, for its build and tests. Source it from the repository root.
 export RUSTUP_HOME="$PWD/.local/rustup" CARGO_HOME="$PWD/.local/cargo"
 curl --proto '=https' --tlsv1.2 --retry 3 -sSf https://sh.rustup.rs | sh -s -- -y -q \
     --no-modify-path --profile minimal \

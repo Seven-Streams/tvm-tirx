@@ -22,7 +22,8 @@
 //!
 //! Laid out like `python/tvm_tirx/ir/`. [`Expr`], [`Stmt`] and [`Type`] are the bases of the three
 //! node hierarchies, and [`IRModule`] holds the functions of a program. [`prim`] holds the
-//! primitive expressions and [`transform`] the pass infrastructure.
+//! primitive expressions, [`transform`] the pass infrastructure and [`op_attr`] the keys of the
+//! operator attributes. Operators and types are defined from Rust in the `tvm-tirx-ext` crate.
 
 // An object registered under `ir` that no file has a block for yet is generated here, to be moved
 // to the file of the Python module that defines it.
@@ -39,13 +40,13 @@ pub mod global_info;
 pub mod location;
 pub mod module;
 pub mod op;
-pub mod op_def;
+pub mod op_attr;
 pub mod prim;
 pub mod stmt;
-pub(crate) mod support;
+#[doc(hidden)]
+pub mod support;
 pub mod transform;
 pub mod r#type;
-pub mod type_def;
 pub mod unique_name_supply;
 
 pub use attrs::*;
@@ -56,10 +57,9 @@ pub use global_info::*;
 pub use location::*;
 pub use module::*;
 pub use op::*;
-pub use op_def::*;
+pub use op_attr::{AttrKey, CallEffectKind};
 pub use stmt::*;
 pub use r#type::*;
-pub use type_def::*;
 pub use unique_name_supply::*;
 
 // tvm-ffi-stubgen(begin): import-section

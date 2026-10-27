@@ -240,7 +240,8 @@ impl Op {
     /// Store `validator` as this operator's validator in place, as C++ `OpDef::set_validator` and
     /// `OpDef::signature` write the registry's node: an opaque pointer to a C ABI adapter, as
     /// `NativeFunctionView::FromNative` stores one.
-    pub(crate) fn write_validator(&self, validator: Any, custom: bool) {
+    #[doc(hidden)]
+    pub fn write_validator(&self, validator: Any, custom: bool) {
         // SAFETY: C++ `OpDef` writes these members of the registry's node in place too. No
         // reference into the node is live, and registration is not synchronized with readers.
         unsafe {

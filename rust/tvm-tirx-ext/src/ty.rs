@@ -31,10 +31,8 @@
 use tvm_ffi::tvm_ffi_sys::{TVMFFIByteArray, TVMFFITypeRegisterAttr};
 use tvm_ffi::{Any, AnyCompatible, Array, Function, ObjectCore, ObjectRefCore, Result, String};
 
-use super::expr::{Expr, IntImm};
-use super::location::Location;
-use super::r#type::{MissingType, PrimType, Type, TypeObj};
-use super::support;
+use tvm_tirx::ir::support;
+use tvm_tirx::ir::{Expr, IntImm, Location, MissingType, PrimType, Type, TypeObj};
 
 /// A valid value of a field type, which an object of a [`register_types!`](crate::register_types)
 /// block holds until reflection sets the field: `__ffi_new__` makes an object with one in every
@@ -139,10 +137,10 @@ fn register_type_attr(type_index: i32, name: &str, mut value: Any) -> Result<()>
 /// block.
 ///
 /// ```no_run
-/// use tvm_tirx::ir::{Type, TypeObj};
-/// use tvm_tirx::tvm_ffi::{self, rs_class};
+/// use tvm_tirx_ext::ir::{Type, TypeObj};
+/// use tvm_tirx_ext::tvm_ffi::{self, rs_class};
 ///
-/// tvm_tirx::register_types! {
+/// tvm_tirx_ext::register_types! {
 ///     /// The type of a pair of values, printed as `my_ext.Pair(first, second)`.
 ///     #[rs_class("my_ext.PairType", final)]
 ///     pub struct PairTypeObj {
@@ -181,18 +179,18 @@ macro_rules! register_types {
 
             $crate::tvm_ffi::def_object_ref!($ref_vis $ref, $parent, $ref_obj);
 
-            impl $crate::ir::Placeholder for $obj {
+            impl $crate::Placeholder for $obj {
                 fn placeholder() -> Self {
                     $obj::new(
-                        <$base_ty as $crate::ir::Placeholder>::placeholder(),
-                        $(<$field_ty as $crate::ir::Placeholder>::placeholder(),)*
+                        <$base_ty as $crate::Placeholder>::placeholder(),
+                        $(<$field_ty as $crate::Placeholder>::placeholder(),)*
                     )
                 }
             }
 
-            impl $crate::ir::Placeholder for $ref {
+            impl $crate::Placeholder for $ref {
                 fn placeholder() -> Self {
-                    <$obj as $crate::ir::Placeholder>::placeholder().into()
+                    <$obj as $crate::Placeholder>::placeholder().into()
                 }
             }
         )*
@@ -208,7 +206,7 @@ macro_rules! register_types {
                 def_object_ref!($ref_vis $ref, $parent, $ref_obj);
             )*),
             || {
-                $($crate::ir::__register_type::<$ref>()?;)*
+                $($crate::__register_type::<$ref>()?;)*
                 Ok(())
             }
         );

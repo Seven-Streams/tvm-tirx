@@ -15,14 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# The crate in rust/, built by cargo as a shared library and installed as libtvm_tirx_rust next to
-# libtvm_tirx_compiler. `import tvm_tirx` loads it through the backend autoload and registers the
-# operators it defines (python/tvm_tirx/backend/rust), as loading the compiler registers the C++
-# ones.
+# The tvm-tirx-ext crate of the workspace in rust/, built by cargo as a shared library and installed
+# as libtvm_tirx_rust next to libtvm_tirx_compiler. `import tvm_tirx` loads it through the backend
+# autoload and registers the operators and types it defines (python/tvm_tirx/backend/rust), as
+# loading the compiler registers the C++ ones.
 #
-# TVM_TIRX_USE_RUST is ON, OFF or AUTO. AUTO builds the library when it can: with the crate's
-# sources (a source distribution has none), with a cargo at least as new as the crate's
-# rust-version, and with the crate's dependencies, which `cargo fetch` gets from crates.io or finds
+# TVM_TIRX_USE_RUST is ON, OFF or AUTO. AUTO builds the library when it can: with the workspace's
+# sources (a source distribution has none), with a cargo at least as new as the workspace's
+# rust-version, and with the crates' dependencies, which `cargo fetch` gets from crates.io or finds
 # in cargo's cache. rustup's cargo ($CARGO_HOME/bin or ~/.cargo/bin) is preferred over one on PATH,
 # which may be an older system cargo; set TVM_TIRX_CARGO to choose another.
 #
@@ -59,7 +59,7 @@ else()
         RESULT_VARIABLE _cargo_fetch OUTPUT_QUIET ERROR_VARIABLE _cargo_fetch_error TIMEOUT 300)
       if(NOT _cargo_fetch EQUAL 0)
         string(REGEX MATCH "error: [^\n]*" _cargo_fetch_error "${_cargo_fetch_error}")
-        set(_rust_problem "`cargo fetch` cannot get the crate's dependencies (${_cargo_fetch_error})")
+        set(_rust_problem "`cargo fetch` cannot get the crates' dependencies (${_cargo_fetch_error})")
       endif()
     endif()
   endif()
@@ -117,13 +117,13 @@ else()
   set(_rust_profile release)
   set(_rust_profile_args --release)
 endif()
-set(_rust_built "${_rust_dir}/target/${_rust_profile}/${CMAKE_SHARED_LIBRARY_PREFIX}tvm_tirx${CMAKE_SHARED_LIBRARY_SUFFIX}")
+set(_rust_built "${_rust_dir}/target/${_rust_profile}/${CMAKE_SHARED_LIBRARY_PREFIX}tvm_tirx_ext${CMAKE_SHARED_LIBRARY_SUFFIX}")
 set(_rust_lib "$<TARGET_FILE_DIR:tvm_tirx_compiler>/${CMAKE_SHARED_LIBRARY_PREFIX}tvm_tirx_rust${CMAKE_SHARED_LIBRARY_SUFFIX}")
 # Cargo decides what to rebuild, so the target always runs it.
 add_custom_target(tvm_tirx_rust ALL
   COMMAND "${CMAKE_COMMAND}" -E env --modify "PATH=path_list_prepend:${_rust_dir}/bin"
     "CARGO_TARGET_DIR=${_rust_dir}/target"
-    "${TVM_TIRX_CARGO}" build --lib ${_rust_profile_args}
+    "${TVM_TIRX_CARGO}" build --package tvm-tirx-ext --lib ${_rust_profile_args}
     --manifest-path "${_rust_manifest}"
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_rust_built}" "${_rust_lib}"
   COMMENT "Building libtvm_tirx_rust with cargo"

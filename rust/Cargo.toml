@@ -15,28 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "tvm-tirx"
+# The Rust crates of TIRx, a standalone workspace: not a member of any enclosing one.
+#
+# - `tvm-tirx` binds the compiler objects of `libtvm_tirx_compiler` over TVM FFI.
+# - `tvm-tirx-ext` extends TIRx from Rust: operators and IR types defined in `register_ops!` and
+#   `register_types!` blocks, and the shared library `import tvm_tirx` loads.
+[workspace]
+members = ["tvm-tirx", "tvm-tirx-ext"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0-alpha.1"
 edition = "2021"
-# The oldest toolchain that builds the crate and tvm-ffi; CMake checks cargo against it.
+# The oldest toolchain that builds the crates and tvm-ffi; CMake checks cargo against it.
 rust-version = "1.84"
 license = "Apache-2.0"
 publish = false
 
-[lib]
-name = "tvm_tirx"
-# The shared library is the one `import tvm_tirx` loads, installed as `libtvm_tirx_rust`.
-crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-linkme = "0.3"
+[workspace.dependencies]
 tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
-
-# A library of operators and a type defined in Rust, which `tests/python/ir/test_op_rust.py` loads.
-[[example]]
-name = "define_ir"
-crate-type = ["cdylib"]
-
-# Standalone crate: not a member of any enclosing workspace.
-[workspace]
+tvm-tirx = { path = "tvm-tirx" }

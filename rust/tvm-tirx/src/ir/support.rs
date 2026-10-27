@@ -120,12 +120,14 @@ where
 }
 
 /// A dtype as C++ prints it, such as `int32`.
-pub(crate) fn dtype_name(dtype: DLDataType) -> std::string::String {
+#[doc(hidden)]
+pub fn dtype_name(dtype: DLDataType) -> std::string::String {
     DLDataTypeExt::to_string(&dtype).as_str().to_string()
 }
 
 /// The registered key of a type index (C++ `TypeIndexToTypeKey`).
-pub(crate) fn type_key(type_index: i32) -> std::string::String {
+#[doc(hidden)]
+pub fn type_key(type_index: i32) -> std::string::String {
     // SAFETY: the type index of a live value is registered, and its information is static.
     unsafe {
         let info = TVMFFIGetTypeInfo(type_index);
@@ -294,7 +296,8 @@ pub(crate) struct SeqCell {
 }
 
 /// The elements of an `ffi.Array`, read in place.
-pub(crate) fn array_cells<T: tvm_ffi::type_traits::ContainerElement + Clone>(
+#[doc(hidden)]
+pub fn array_cells<T: tvm_ffi::type_traits::ContainerElement + Clone>(
     array: &Array<T>,
 ) -> &[TVMFFIAny] {
     // SAFETY: an `ffi.Array` is the object header followed by `TVMFFISeqCell`, and `array` keeps

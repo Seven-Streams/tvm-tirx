@@ -17,8 +17,8 @@
  * under the License.
  */
 
-//! The operator attributes of TIRx (C++ `tvm::tirx::op_attr`), for
-//! [`OpDef::set_attr`](crate::ir::OpDef::set_attr).
+//! The operator attributes of TIRx (C++ `tvm::tirx::op_attr`), the keys `OpDef::set_attr` of the
+//! `tvm-tirx-ext` crate takes, as [`ir::op_attr`](crate::ir::op_attr) has those of the shared IR.
 
 use tvm_ffi::String;
 
