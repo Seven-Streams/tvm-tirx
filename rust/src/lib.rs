@@ -134,8 +134,7 @@
 //!             sig::arg::<IntExpr>("bound", "The exclusive upper bound."),
 //!         ))
 //!         .set_infer_type(index_type)
-//!         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure)
-//!         .op()?;
+//!         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
 //!     register_type::<PairType>()?;
 //! }
 //!
@@ -149,19 +148,19 @@
 //!
 //! # The library Python loads
 //!
-//! The crate is also built as a shared library, which the TIRx build installs as
-//! `libtvm_tirx_rust` next to `libtvm_tirx_compiler` when it finds a cargo as new as the crate's
-//! `rust-version` (`TVM_TIRX_USE_RUST`, `AUTO` by default). `import tvm_tirx` loads it through
-//! the backend autoload (`tvm_tirx.backend.rust`), which registers the operators and types the
-//! crate defines by the time the import returns, as the C++ ones are, and calls `tirx_register_ir`
-//! to raise the error of a block that failed. Python uses the operators as it uses the C++ ones:
-//! `Op.get` finds them, a `Call` built in Python runs their hooks, and the TVMScript printer prints
-//! their calls. Completing an operator with [`ir::OpDef::op`] or a type with [`ir::register_type`]
-//! requests API exposure through the `ir.expose_op` or `ir.expose_type` FFI receiver.
-//! Python installs these receivers before loading native libraries and publishes the selected
-//! definitions to registered destinations, including destinations initialized later. Op API
-//! destinations construct raw calls; script destinations add builder behavior. Type destinations
-//! publish constructors, such as `T.<Name>` for `tirx.<Name>Type`. Handwritten Python bindings take
+//! The crate is also built as a shared library, which the TIRx build installs as `libtvm_tirx_rust`
+//! next to `libtvm_tirx_compiler` when it finds a cargo as new as the crate's `rust-version`
+//! (`TVM_TIRX_USE_RUST`, `AUTO` by default). `import tvm_tirx` loads it through the backend
+//! autoload (`tvm_tirx.backend.rust`), which registers the operators and types the crate defines by
+//! the time the import returns, as the C++ ones are, and calls `tirx_register_ir` to raise the
+//! error of a block that failed. Python uses the operators as it uses the C++ ones: `Op.get` finds
+//! them, a `Call` built in Python runs their hooks, and the TVMScript printer prints their calls.
+//! Completing an operator, when its [`ir::OpDef`] chain ends, or a type with [`ir::register_type`]
+//! requests API exposure through the `ir.expose_op` or `ir.expose_type` FFI receiver. Python
+//! installs these receivers before loading native libraries and publishes the selected definitions
+//! to registered destinations, including destinations initialized later. Op API destinations
+//! construct raw calls; script destinations add builder behavior. Type destinations publish
+//! constructors, such as `T.<Name>` for `tirx.<Name>Type`. Handwritten Python bindings take
 //! precedence in each destination. Without receivers, native registration proceeds without API
 //! exposure.
 //!

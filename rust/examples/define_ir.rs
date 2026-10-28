@@ -70,21 +70,18 @@ tvm_ffi::static_init_block! {
             sig::arg::<IntExpr>("bound", "The exclusive upper bound."),
         ))
         .set_infer_type(first_arg_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure)
-        .op()?;
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
 
     // `Call.attrs` holds a `DictAttrs`; outside `tirx.`, the calls print as `my_ext.hint(..)`.
     OpDef::new("my_ext.hint", "Return the value, with hints for the code generator.")
         .signature((sig::arg::<Expr>("value", "The value."), sig::call_attrs::<DictAttrs>()))
         .set_infer_type(first_arg_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation)
-        .op()?;
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation);
 
     // A region operation, which binds an index in its body.
     OpDef::new("tirx.example_loop", "Run the body for each index in `[0, extent)`.")
         .signature(sig::arg::<IntExpr>("extent", "The number of iterations."))
-        .set_region_body_params(loop_index)
-        .op()?;
+        .set_region_body_params(loop_index);
 
     register_type::<ExamplePairType>()?;
 }
@@ -101,7 +98,6 @@ mod effects {
         ")
             .signature(())
             .set_attr(FIXED_RETURN_TYPE, PrimType::void())
-            .set_attr(CALL_EFFECT_KIND, CallEffectKind::Opaque)
-            .op()?;
+            .set_attr(CALL_EFFECT_KIND, CallEffectKind::Opaque);
     }
 }

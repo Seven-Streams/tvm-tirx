@@ -56,31 +56,33 @@ use sig::{Checks, Specs};
 
 /// C++ `OpDef`: register a new operator from Rust.
 ///
-/// Each step updates the registry at once, as in C++. After a failed step the rest are skipped,
-/// and [`OpDef::op`] returns the error. The registry does not synchronize registration with
-/// readers, so register an operator before building IR with it, as a
-/// [`tvm_ffi::static_init_block!`] does. An operator and its hooks live for the rest of the
+/// Each step updates the registry at once, as in C++. After a failed step the rest are skipped.
+/// The chain completes when it is dropped, at the end of its statement, as a C++ `OpDef` does:
+/// the operator's APIs are requested in registered destinations, and the error of a failed step
+/// panics, which a [`tvm_ffi::static_init_block!`] reports as the error of its block.
+/// [`OpDef::op`] completes it instead, and returns the operator or the error. The registry does
+/// not synchronize registration with readers, so register an operator before building IR with it,
+/// as a [`tvm_ffi::static_init_block!`] does. An operator and its hooks live for the rest of the
 /// process.
 ///
 /// ```no_run
 /// use tvm_tirx::ir::op_attr::CALL_EFFECT_KIND;
 /// use tvm_tirx::ir::sig::{self, IntExpr};
 /// use tvm_tirx::ir::{CallEffectKind, CallObj, OpDef, Type};
-/// use tvm_tirx::tvm_ffi::Result;
+/// use tvm_tirx::tvm_ffi::{self, Result};
 ///
 /// fn first_arg_type(call: &CallObj) -> Result<Type> {
 ///     Ok(call.args.get(0)?.ty.clone())
 /// }
 ///
-/// let op = OpDef::new("my_ext.clamp", "Clamp an index to a bound.")
-///     .signature((sig::arg::<IntExpr>("index", ""), sig::arg::<IntExpr>("bound", "")))
-///     .set_infer_type(first_arg_type)
-///     .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure)
-///     .op()?;
-/// # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
+/// tvm_ffi::static_init_block! {
+///     OpDef::new("my_ext.clamp", "Clamp an index to a bound.")
+///         .signature((sig::arg::<IntExpr>("index", ""), sig::arg::<IntExpr>("bound", "")))
+///         .set_infer_type(first_arg_type)
+///         .set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
+/// }
 /// ```
-#[must_use = "end the chain with `.op()?`, which returns its error and exposes the operator"]
-pub struct OpDef(Result<Op>);
+pub struct OpDef(Option<Result<Op>>);
 
 impl OpDef {
     /// Register a new operator (`ir.RegisterOp`), with `doc` as its documentation, less the
@@ -89,18 +91,13 @@ impl OpDef {
     pub fn new(name: &str, doc: &str) -> Self {
         let registered = tvm_ffi::cached_global_func!("ir.RegisterOp")
             .call_tuple((String::from(name), String::from(doc_text(doc))));
-        Self(registered.and_then(|_| Op::get(name)))
+        Self(Some(registered.and_then(|_| Op::get(name))))
     }
 
-    /// The completed operator, or the error of the step that failed. Request its APIs in
-    /// registered destinations through `ir.expose_op` after its signature and attributes are ready.
-    /// An absent receiver is a no-op; an installed receiver's error is returned.
-    pub fn op(self) -> Result<Op> {
-        let op = self.0?;
-        if let Ok(expose) = tvm_ffi::Function::get_global("ir.expose_op") {
-            expose.call_tuple((op.name.clone(),))?;
-        }
-        Ok(op)
+    /// Complete the chain now: the operator, or the error of the step that failed, which
+    /// dropping the chain would panic with.
+    pub fn op(mut self) -> Result<Op> {
+        complete(self.take())
     }
 
     /// C++ `OpDef::signature`: replace the argument descriptions and the attrs type, and the
@@ -238,9 +235,37 @@ impl OpDef {
         })
     }
 
-    fn then(self, step: impl FnOnce(&Op) -> Result<()>) -> Self {
-        Self(self.0.and_then(|op| step(&op).map(|_| op)))
+    fn then(mut self, step: impl FnOnce(&Op) -> Result<()>) -> Self {
+        Self(Some(self.take().and_then(|op| step(&op).map(|_| op))))
     }
+
+    /// The state of the chain, which leaves nothing for `drop` to complete.
+    fn take(&mut self) -> Result<Op> {
+        self.0.take().expect("an `OpDef` is completed once")
+    }
+}
+
+impl Drop for OpDef {
+    fn drop(&mut self) {
+        // Dropped while a panic unwinds, the chain did not finish, and a second panic would abort.
+        if std::thread::panicking() {
+            return;
+        }
+        if let Some(Err(error)) = self.0.take().map(complete) {
+            panic!("{}: {}", error.kind(), error.message());
+        }
+    }
+}
+
+/// Request the APIs of a defined operator in registered destinations through `ir.expose_op`,
+/// after its signature and attributes are ready. An absent receiver is a no-op; an installed
+/// receiver's error is returned.
+fn complete(state: Result<Op>) -> Result<Op> {
+    let op = state?;
+    if let Ok(expose) = tvm_ffi::Function::get_global("ir.expose_op") {
+        expose.call_tuple((op.name.clone(),))?;
+    }
+    Ok(op)
 }
 
 /// C++ `ffi::reflection::AttrKey<T>`: the name of an operator attribute and the type of its
@@ -338,8 +363,7 @@ impl From<CallEffectKind> for Any {
 /// tvm_ffi::static_init_block! {
 ///     OpDef::new("my_ext.clamp", "Clamp an index to a bound.")
 ///         .signature((sig::arg::<IntExpr>("index", ""), sig::arg::<IntExpr>("bound", "")))
-///         .set_infer_type(first_arg_type)
-///         .op()?;
+///         .set_infer_type(first_arg_type);
 /// }
 ///
 /// static CLAMP: OpHandle = OpHandle::new("my_ext.clamp");

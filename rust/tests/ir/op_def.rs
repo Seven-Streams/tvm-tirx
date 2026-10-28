@@ -438,20 +438,17 @@ tvm_ffi::static_init_block! {
     ")
         .signature(sig::arg::<Expr>("value", "The value."))
         .set_infer_type(identity_type)
-        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation)
-        .op()?;
+        .set_attr(CALL_EFFECT_KIND, CallEffectKind::ExprAnnotation);
 
     // `tirx.launch_thread`'s region contract (`src/tirx/op/region.cc`), written in Rust: one
     // thread index of the extent's type.
     OpDef::new("rust_test.launch", "Bind a thread index below an extent.")
         .signature((sig::arg::<StringImm>("tag", ""), sig::arg::<IntExpr>("extent", "")))
         .set_region_body_params(launch_body_params)
-        .set_region_validate(no_results_or_attributes)
-        .op()?;
+        .set_region_validate(no_results_or_attributes);
 
     OpDef::new("rust_test.panicking_region", "")
-        .set_region_body_params(|_: &CallObj| -> Result<Array<Var>> { panic!("hook bug") })
-        .op()?;
+        .set_region_body_params(|_: &CallObj| -> Result<Array<Var>> { panic!("hook bug") });
 
     register_type::<BlockType>()?;
 }
@@ -461,13 +458,13 @@ mod elsewhere {
 
     tvm_ffi::static_init_block! {
         OpDef::new("rust_test.defined_elsewhere", "An operator in another module.")
-            .set_attr(FIXED_RETURN_TYPE, PrimType::void())
-            .op()?;
+            .set_attr(FIXED_RETURN_TYPE, PrimType::void());
     }
 }
 
 // Two blocks that fail, which `run_static_init_blocks` reports together while it runs the others: a
-// name C++ registers, and a second custom validator, after which the block stops.
+// name C++ registers, which `.op()?` returns, and a second custom validator, which the chain panics
+// with when it is dropped, after which the block stops.
 mod failing {
     use super::*;
 
@@ -476,8 +473,8 @@ mod failing {
     }
 
     tvm_ffi::static_init_block! {
-        OpDef::new("rust_test.defined_broken", "").set_validator(accept).set_validator(accept).op()?;
-        OpDef::new("rust_test.after_broken", "").op()?;
+        OpDef::new("rust_test.defined_broken", "").set_validator(accept).set_validator(accept);
+        OpDef::new("rust_test.after_broken", "");
     }
 }
 
@@ -563,6 +560,38 @@ fn region(
     })
 }
 
+/// The text of a panic `catch_unwind` caught.
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(text) => *text,
+        Err(payload) => payload.downcast_ref::<&str>().unwrap_or(&"").to_string(),
+    }
+}
+
+#[test]
+fn a_chain_completes_when_it_is_dropped() {
+    let _serial = serial();
+    // Dropped at the end of its statement, the chain exposes the operator.
+    OpDef::new("rust_test.dropped", "").set_attr(CALL_EFFECT_KIND, CallEffectKind::Pure);
+    let effect = Op::attr_map::<i64>("TCallEffectKind").unwrap().unwrap();
+    assert_eq!(effect.get(&Op::get("rust_test.dropped").unwrap()).unwrap(), Some(1));
+
+    // A failed chain panics with its error when it is dropped.
+    let caught = std::panic::catch_unwind(|| {
+        OpDef::new("tirx.launch_thread", "");
+    });
+    let text = panic_text(caught.unwrap_err());
+    assert!(text.starts_with("AttributeError: "), "{text}");
+    assert!(text.ends_with("Operator tirx.launch_thread is registered before"), "{text}");
+
+    // Dropped while another panic unwinds, it does not panic again, which would abort.
+    let caught = std::panic::catch_unwind(|| {
+        let _def = OpDef::new("tirx.launch_thread", "");
+        panic!("the first panic");
+    });
+    assert_eq!(panic_text(caught.unwrap_err()), "the first panic");
+}
+
 #[test]
 fn static_init_blocks_define_operators_and_types() {
     let _serial = serial();
@@ -586,8 +615,12 @@ fn static_init_blocks_define_operators_and_types() {
     let message = error.message();
     assert!(message.starts_with("2 static init blocks failed:"), "{message}");
     assert!(message.contains("op_def::failing:"), "{message}");
+    // A chain that is dropped reports its error as the panic of the block.
     assert!(
-        message.contains("ValueError: Validator of rust_test.defined_broken is already registered"),
+        message.contains(
+            "InternalError: panicked: ValueError: Validator of rust_test.defined_broken is already \
+             registered"
+        ),
         "{message}"
     );
     assert!(message.contains("AttributeError: "), "{message}");
