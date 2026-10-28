@@ -29,6 +29,7 @@ mod location;
 mod module;
 mod op;
 mod op_def;
+mod placeholder;
 mod prim;
 mod stmt;
 mod transform;

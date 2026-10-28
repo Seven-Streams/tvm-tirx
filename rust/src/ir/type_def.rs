@@ -27,84 +27,191 @@
 //! a JSON graph. A Rust object cannot be empty, as its references are not null, so
 //! [`register_type`] registers `__ffi_new__`, which makes an object whose fields hold
 //! [`Placeholder`]s, and tvm-ffi then sets each field as it sets those of a C++ object.
+//! `#[rs_class(..., placeholder)]` implements [`Placeholder`] for the object, from the
+//! placeholders of the parent's object and the fields, and this module implements it for the
+//! objects such a type extends and for the IR types its fields hold.
+//!
+//! The object a type extends (`TypeObj`, `ExprObj`, `VarObj`, ...) holds the placeholders of its
+//! fields. Any other placeholder is a node its constructor builds from the simplest arguments, as
+//! C++ builds and types it: an expression is `0`, an `int32` constant, and an operation `0 + 0`,
+//! `0 == 0` or `false && false`; a type is `MissingType`, and each other type its empty case
+//! (`void`, `()`, `void*` in the global memory, the scalar `void` tensor); an abstract reference
+//! takes a node of a concrete type (a `Constant` is `0`, a `StagingExpr` `lambda: 0`, a `BaseFunc`
+//! the function `() -> ()` without a body).
 
 use tvm_ffi::tvm_ffi_sys::{TVMFFIByteArray, TVMFFITypeRegisterAttr};
-use tvm_ffi::{Any, AnyCompatible, Array, Function, ObjectCore, ObjectRefCore, Result, String};
+use tvm_ffi::{
+    Any, AnyCompatible, Array, Function, Map, ObjectCore, ObjectRefCore, Placeholder, Result,
+    String,
+};
 
-use super::expr::{Expr, IntImm};
+use super::attrs::{Attrs, DictAttrs};
+use super::dtype;
+use super::expr::{
+    Call, Constant, ConstantObj, DataTypeImm, Expr, ExprObj, FloatImm, GenericConst, GlobalVar,
+    IntImm, LambdaExpr, OpaqueExpr, OpaqueExprObj, Range, StagingExpr, StagingExprObj, StringImm,
+    TensorLoad, TensorRegion, Tuple, TupleGetItem, Var, VarObj,
+};
+use super::function::{BaseFunc, BaseFuncObj};
 use super::location::Location;
-use super::r#type::{MissingType, PrimType, Type, TypeObj};
+use super::prim;
+use super::r#type::{
+    AnyType, FuncType, MissingType, NoneType, OpaqueType, PrimType, PtrType, PtrTypeObj,
+    StringType, TensorRegionType, TupleType, Type, TypeObj,
+};
 use super::support;
+use crate::runtime::MemoryScope;
+use crate::tirx;
 
-/// A valid value of a field type, which an object of a type [`register_type`] registers holds
-/// until reflection sets the field: `__ffi_new__` makes an object with one in every field, and a
-/// field `__ffi_init__` does not take (`#[reflect(init_off)]`) keeps it. The object of a type you
-/// register implements it, from the placeholders of its parent's object and its fields; this
-/// crate implements it for the common field types, and a field type of your own crate implements
-/// it too.
-pub trait Placeholder {
-    /// The value.
-    fn placeholder() -> Self;
-}
-
-macro_rules! default_placeholder {
-    ($($ty:ty),*) => {
+/// `impl Placeholder for $ty { fn placeholder() -> Self { $value } }` for each `$ty => $value`.
+macro_rules! placeholders {
+    ($($ty:ty => $value:expr;)*) => {
         $(impl Placeholder for $ty {
             fn placeholder() -> Self {
-                Self::default()
+                $value
             }
         })*
     };
 }
 
-default_placeholder!(bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
-
-impl Placeholder for String {
-    fn placeholder() -> Self {
-        String::from("")
-    }
+/// The placeholder of each binary node `prim::$node`: the node of `$operand` and `$operand`.
+macro_rules! binary_placeholders {
+    ($operand:expr => $($node:ident),*) => {
+        placeholders! {
+            $(prim::$node => support::infallible(
+                prim::$node::new($operand, $operand, Location::unknown()),
+            );)*
+        }
+    };
 }
 
-impl<T: AnyCompatible + Clone + 'static> Placeholder for Array<T> {
-    fn placeholder() -> Self {
-        Array::new(vec![])
-    }
+// The objects a type extends.
+placeholders! {
+    TypeObj => TypeObj::new(Location::unknown());
+    ExprObj => ExprObj::new(Location::unknown(), Type::placeholder());
+    ConstantObj => ConstantObj::new(Location::unknown(), Type::placeholder());
+    StagingExprObj => StagingExprObj::new(Location::unknown(), Type::placeholder());
+    OpaqueExprObj => OpaqueExprObj::new(Location::unknown(), Type::placeholder());
+    VarObj => VarObj::new(Location::unknown(), Type::placeholder(), String::placeholder());
+    BaseFuncObj => {
+        BaseFuncObj::new(Location::unknown(), Type::placeholder(), DictAttrs::placeholder())
+    };
 }
 
-impl<T> Placeholder for Option<T> {
-    fn placeholder() -> Self {
-        None
-    }
+// The fields of the nodes.
+placeholders! {
+    Location => Location::unknown();
+    DictAttrs => DictAttrs::new(Map::default());
+    // The global memory, `MemoryScope::Global()`, which C++ registers as the default scope of a
+    // pointer: Rust has no lookup of a memory scope by name.
+    MemoryScope => support::field_default(PtrTypeObj::type_index(), "scope")
+        .and_then(|scope| MemoryScope::try_from(scope).ok())
+        .expect("ir.PtrType registers the global memory as the default of its scope");
 }
 
-impl Placeholder for Location {
-    fn placeholder() -> Self {
-        Location::unknown()
-    }
+// Types.
+placeholders! {
+    Type => MissingType::new().into();
+    MissingType => MissingType::new();
+    NoneType => NoneType::new();
+    AnyType => AnyType::new(Location::unknown());
+    OpaqueType => OpaqueType::new(Location::unknown());
+    StringType => StringType::new(Location::unknown());
+    TensorRegionType => TensorRegionType::new();
+    PrimType => PrimType::void();
+    // `void*` (C++ `PtrType::VoidPtrType()`).
+    PtrType => {
+        PtrType::from_fields(Location::unknown(), PrimType::void(), MemoryScope::placeholder())
+    };
+    // `()`, the result of a function that returns nothing.
+    TupleType => TupleType::new(Vec::<Type>::new(), Location::unknown());
+    FuncType => FuncType::new(Vec::<Type>::new(), TupleType::placeholder());
+    tirx::TensorMapType => tirx::TensorMapType::new(Location::unknown());
+    // The scalar `void` tensor in the global memory, of the default alignment.
+    tirx::TensorType => support::infallible(tirx::TensorType::new(
+        Vec::<Expr>::new(),
+        PrimType::void(),
+        MemoryScope::placeholder(),
+        0,
+        None,
+        Location::unknown(),
+    ));
 }
 
-impl Placeholder for TypeObj {
-    fn placeholder() -> Self {
-        TypeObj::new(Location::unknown())
-    }
+// Expressions.
+placeholders! {
+    Expr => IntImm::placeholder().into();
+    Constant => IntImm::placeholder().into();
+    IntImm => IntImm::int32(0);
+    FloatImm => FloatImm::float32(0.0);
+    StringImm => StringImm::new("", Location::unknown());
+    DataTypeImm => DataTypeImm::from_dtype(dtype::void(), Location::unknown());
+    // `None`.
+    GenericConst => GenericConst::new(Location::unknown(), NoneType::new(), Any::default());
+    Var => Var::new("", Type::placeholder(), Location::unknown());
+    GlobalVar => GlobalVar::new("", Location::unknown());
+    Tuple => Tuple::new(Vec::<Expr>::new(), Location::unknown());
+    // `(0,)[0]`.
+    TupleGetItem => {
+        let tuple = Tuple::new([Expr::placeholder()], Location::unknown());
+        support::infallible(TupleGetItem::from_tuple(tuple, 0, Location::unknown()))
+    };
+    // A call of the placeholder global variable without arguments.
+    Call => Call::from_fields(
+        Location::unknown(),
+        Type::placeholder(),
+        GlobalVar::placeholder(),
+        Array::<Expr>::default(),
+        None::<Attrs>,
+        Array::<Type>::default(),
+    );
+    TensorLoad => {
+        support::infallible(TensorLoad::new(tensor_var(), Vec::<Expr>::new(), Location::unknown()))
+    };
+    TensorRegion => TensorRegion::new(
+        Location::unknown(),
+        TensorRegionType::new(),
+        tensor_var(),
+        Array::<Range>::default(),
+    );
+    LambdaExpr => LambdaExpr::new(Vec::<Var>::new(), Expr::placeholder(), Location::unknown());
+    StagingExpr => LambdaExpr::placeholder().into();
+    OpaqueExpr => OpaqueExpr::new(Location::unknown(), Type::placeholder());
+    BaseFunc => tirx::Function::placeholder().into();
+    tirx::Function => tirx::Function::new(
+        Vec::<Var>::new(),
+        None,
+        Type::placeholder(),
+        DictAttrs::placeholder(),
+        Location::unknown(),
+    );
 }
 
-impl Placeholder for Type {
-    fn placeholder() -> Self {
-        MissingType::new().into()
-    }
+binary_placeholders!(0 => Add, Sub, Mul, Div, Mod, FloorDiv, FloorMod, Min, Max);
+binary_placeholders!(0 => LShift, RShift, BitwiseAnd, BitwiseOr, BitwiseXor);
+binary_placeholders!(0 => EQ, NE, LT, LE, GT, GE);
+binary_placeholders!(false => And, Or);
+
+placeholders! {
+    prim::Cast => support::infallible(prim::Cast::new(PrimType::int(32), 0, Location::unknown()));
+    prim::BitwiseNot => support::infallible(prim::BitwiseNot::new(0, Location::unknown()));
+    prim::Not => support::infallible(prim::Not::new(false, Location::unknown()));
+    prim::Select => support::infallible(prim::Select::new(false, 0, 0, Location::unknown()));
+    // `let x = 0 in 0`.
+    prim::Let => {
+        let var = Var::new("", PrimType::int(32), Location::unknown());
+        support::infallible(prim::Let::new(var, 0, 0, Location::unknown()))
+    };
+    // `[0, 1]`, `[0, 0]` and `[0]`.
+    prim::Ramp => support::infallible(prim::Ramp::new(0, 1, 2, Location::unknown()));
+    prim::Broadcast => support::infallible(prim::Broadcast::new(0, 2, Location::unknown()));
+    prim::Shuffle => support::infallible(prim::Shuffle::new([0], [0], Location::unknown()));
 }
 
-impl Placeholder for PrimType {
-    fn placeholder() -> Self {
-        PrimType::void()
-    }
-}
-
-impl Placeholder for Expr {
-    fn placeholder() -> Self {
-        IntImm::new(Location::unknown(), PrimType::int(32), 0).into()
-    }
+/// The tensor of the `TensorLoad` and `TensorRegion` placeholders: a variable of the placeholder
+/// tensor type.
+fn tensor_var() -> Var {
+    Var::new("", tirx::TensorType::placeholder(), Location::unknown())
 }
 
 /// Register the IR type of the reference `R`, an `rs_class` type, as C++ registers one with
@@ -123,11 +230,11 @@ impl Placeholder for Expr {
 /// is; the type's struct, reference and `impl`s are written outside the block, as any other:
 ///
 /// ```no_run
-/// use tvm_tirx::ir::{register_type, Location, Placeholder, Type, TypeObj};
+/// use tvm_tirx::ir::{register_type, Location, Type, TypeObj};
 /// use tvm_tirx::tvm_ffi::{self, def_object_ref, rs_class, ObjectRefCore};
 ///
 /// /// The type of a pair of values, printed as `my_ext.Pair(first, second)`.
-/// #[rs_class("my_ext.PairType", final)]
+/// #[rs_class("my_ext.PairType", final, placeholder)]
 /// pub struct PairTypeObj {
 ///     base: TypeObj,
 ///     pub first: Type,
@@ -135,12 +242,6 @@ impl Placeholder for Expr {
 ///     pub second: Type,
 /// }
 /// def_object_ref!(pub PairType, Type, PairTypeObj);
-///
-/// impl Placeholder for PairTypeObj {
-///     fn placeholder() -> Self {
-///         Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
-///     }
-/// }
 ///
 /// impl PairType {
 ///     pub fn new(first: impl Into<Type>, second: impl Into<Type>) -> Self {
