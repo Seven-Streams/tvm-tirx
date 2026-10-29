@@ -17,12 +17,19 @@
 
 [package]
 name = "tvm-tirx"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.5"
 edition = "2021"
 # The oldest toolchain that builds the crate and tvm-ffi; CMake checks cargo against it.
 rust-version = "1.84"
+description = "Rust bindings for the TVM TIRx compiler"
 license = "Apache-2.0"
-publish = false
+homepage = "https://tvm.apache.org/tirx/"
+documentation = "https://tvm.apache.org/tirx/reference/rust/"
+repository = "https://github.com/apache/tvm-tirx"
+keywords = ["tvm", "compiler", "tensor", "ir", "ffi"]
+categories = ["compilers", "api-bindings"]
+# The build directories CMake creates here are not part of the crate.
+include = ["/build.rs", "/src", "/examples", "/tests"]
 
 [lib]
 name = "tvm_tirx"
@@ -30,7 +37,9 @@ name = "tvm_tirx"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-tvm-ffi = { path = "../3rdparty/tvm-ffi/rust/tvm-ffi" }
+# The release of 3rdparty/tvm-ffi. An exact requirement, since 0.1.15-post2 is a pre-release of
+# 0.1.15 for semver, and a caret requirement would select the older 0.1.15.
+tvm-ffi = "=0.1.15-post2"
 
 # A library of operators and a type defined in Rust, which `tests/python/ir/test_op_rust.py` loads.
 [[example]]
