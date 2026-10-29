@@ -32,8 +32,8 @@ use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr, PrimExpr, PrimVar};
 use tvm_tirx::ir::{
     register_type, AttrKey, Attrs, Call, CallEffectKind, CallObj, DictAttrs, Evaluate, Expr,
-    FuncType, IntImm, Op, OpDef, OpHandle, Placeholder, PrimType, RegionStmt, RegionStmtObj,
-    StringImm, Type, TypeObj, Var, VarObj, UNKNOWN_LOC,
+    FuncType, IntImm, Op, OpDef, OpHandle, PrimType, RegionStmt, RegionStmtObj, StringImm, Type,
+    TypeObj, Var, VarObj, UNKNOWN_LOC,
 };
 use tvm_tirx::tirx::{CallFFIKernelAttr, TensorVar};
 use tvm_tirx::tvm_ffi::static_init::{StaticInitBlock, STATIC_INIT_BLOCKS};
@@ -423,12 +423,6 @@ pub struct BlockTypeObj {
     pub count: i64,
 }
 def_object_ref!(pub BlockType, Type, BlockTypeObj);
-
-impl Placeholder for BlockTypeObj {
-    fn placeholder() -> Self {
-        Self::new(TypeObj::placeholder(), Type::placeholder(), i64::placeholder())
-    }
-}
 
 tvm_ffi::static_init_block! {
     OpDef::new("rust_test.defined_identity", "

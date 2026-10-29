@@ -73,6 +73,7 @@ use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::support;
 use std::ops::Deref;
+use std::ptr::addr_of_mut;
 use tvm_ffi::Any;
 use tvm_ffi::AnyView;
 use tvm_ffi::Array;
@@ -85,6 +86,8 @@ use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::ShallowCopy;
 use tvm_ffi::String;
+use tvm_ffi::UnsafeInit;
+use tvm_ffi::reflection::drop_if_defined;
 use tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 // tvm-ffi-stubgen(end)
 
@@ -134,6 +137,15 @@ impl Stmt {
 impl ShallowCopy for StmtObj {
     fn shallow_copy(&self) -> Self {
         Self { base: ShallowCopy::shallow_copy(&self.base), loc: Clone::clone(&self.loc) }
+    }
+}
+
+unsafe impl UnsafeInit for StmtObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+            drop_if_defined(addr_of_mut!((*this).loc));
+        }
     }
 }
 // tvm-ffi-stubgen(end)

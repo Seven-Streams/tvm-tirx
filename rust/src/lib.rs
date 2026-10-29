@@ -112,16 +112,11 @@
 //! use tvm_tirx::ir::sig::{self, IntExpr};
 //! use tvm_tirx::ir::{register_type, CallEffectKind, CallObj, OpDef, OpHandle, Type};
 //! use tvm_tirx::tvm_ffi::{self, Result};
-//! # use tvm_tirx::ir::{Placeholder, TypeObj};
+//! # use tvm_tirx::ir::TypeObj;
 //! # use tvm_tirx::tvm_ffi::{def_object_ref, rs_class, ObjectRefCore};
 //! # #[rs_class("my_ext.PairType", final)]
 //! # pub struct PairTypeObj { base: TypeObj, pub first: Type, pub second: Type }
 //! # def_object_ref!(pub PairType, Type, PairTypeObj);
-//! # impl Placeholder for PairTypeObj {
-//! #     fn placeholder() -> Self {
-//! #         Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
-//! #     }
-//! # }
 //!
 //! fn index_type(call: &CallObj) -> Result<Type> {
 //!     Ok(call.args.get(0)?.ty.clone())
@@ -214,11 +209,10 @@
 //!
 //! The generated code names `tvm_ffi`, which `use tvm_tirx::tvm_ffi` brings into scope in a crate
 //! that depends only on `tvm-tirx`. The parent's object must have a public `new` and implement
-//! `ShallowCopy`; the bindings generate both for a complete type that is not final, as `ir.Type`.
-//! Registered by [`ir::register_type`] in a [`tvm_ffi::static_init_block!`], with the operators,
-//! the type is also constructed by Python from its fields and parsed by TVMScript, as a C++ type;
-//! its object must implement [`ir::Placeholder`], written from the placeholders of the parent's
-//! object and the fields.
+//! `ShallowCopy` and `UnsafeInit`; the bindings generate them for a complete type that is not
+//! final, as `ir.Type`. Registered by [`ir::register_type`] in a [`tvm_ffi::static_init_block!`],
+//! with the operators, the type is also constructed by Python from its fields and parsed by
+//! TVMScript, as a C++ type.
 //!
 //! # Generated and hand-written code
 //!

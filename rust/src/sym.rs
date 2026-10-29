@@ -41,9 +41,11 @@ use crate::ir::expr::Expr;
 use crate::ir::expr::Range;
 use crate::ir::expr::Var;
 use std::ops::Deref;
+use std::ptr::addr_of_mut;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ShallowCopy;
+use tvm_ffi::UnsafeInit;
 // tvm-ffi-stubgen(end)
 
 // tvm-ffi-stubgen(begin): object/sym.Constraint
@@ -91,6 +93,14 @@ impl Constraint {
 impl ShallowCopy for ConstraintObj {
     fn shallow_copy(&self) -> Self {
         Self { base: ShallowCopy::shallow_copy(&self.base) }
+    }
+}
+
+unsafe impl UnsafeInit for ConstraintObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+        }
     }
 }
 // tvm-ffi-stubgen(end)

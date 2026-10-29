@@ -31,8 +31,8 @@
 use tvm_tirx::ir::op_attr::{CALL_EFFECT_KIND, FIXED_RETURN_TYPE};
 use tvm_tirx::ir::sig::{self, IntExpr};
 use tvm_tirx::ir::{
-    register_type, CallEffectKind, CallObj, DictAttrs, Expr, OpDef, Placeholder, PrimType, Type,
-    TypeObj, Var, UNKNOWN_LOC,
+    register_type, CallEffectKind, CallObj, DictAttrs, Expr, OpDef, PrimType, Type, TypeObj, Var,
+    UNKNOWN_LOC,
 };
 use tvm_tirx::tvm_ffi::{self, def_object_ref, rs_class, Array, ObjectRefCast, Result};
 
@@ -47,7 +47,7 @@ fn loop_index(call: &CallObj) -> Result<Array<Var>> {
 }
 
 // A type, which Python constructs from its fields, `T.ExamplePair(T.int32, T.float32)`, as it
-// constructs a C++ type. Its object makes the placeholder `__ffi_new__` fills.
+// constructs a C++ type.
 /// The type of a pair of values.
 #[rs_class("tirx.ExamplePairType", final)]
 pub struct ExamplePairTypeObj {
@@ -56,12 +56,6 @@ pub struct ExamplePairTypeObj {
     pub second: Type,
 }
 def_object_ref!(pub ExamplePairType, Type, ExamplePairTypeObj);
-
-impl Placeholder for ExamplePairTypeObj {
-    fn placeholder() -> Self {
-        Self::new(TypeObj::placeholder(), Type::placeholder(), Type::placeholder())
-    }
-}
 
 tvm_ffi::static_init_block! {
     OpDef::new("tirx.example_clamp", "Clamp an index to the range `[0, bound)`.")

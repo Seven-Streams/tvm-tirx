@@ -78,6 +78,7 @@ use crate::ir::r#type::TupleTypeObj;
 use crate::ir::r#type::Type;
 use crate::ir::support;
 use std::ops::Deref;
+use std::ptr::addr_of_mut;
 use tvm_ffi::Any;
 use tvm_ffi::AnyView;
 use tvm_ffi::Array;
@@ -89,6 +90,8 @@ use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::ShallowCopy;
 use tvm_ffi::String;
+use tvm_ffi::UnsafeInit;
+use tvm_ffi::reflection::drop_if_defined;
 use tvm_ffi::tvm_ffi_sys::TVMFFITypeIndex;
 // tvm-ffi-stubgen(end)
 
@@ -142,6 +145,16 @@ impl ShallowCopy for ExprObj {
             base: ShallowCopy::shallow_copy(&self.base),
             loc: Clone::clone(&self.loc),
             ty: Clone::clone(&self.ty),
+        }
+    }
+}
+
+unsafe impl UnsafeInit for ExprObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+            drop_if_defined(addr_of_mut!((*this).loc));
+            drop_if_defined(addr_of_mut!((*this).ty));
         }
     }
 }
@@ -240,6 +253,14 @@ impl ShallowCopy for StagingExprObj {
     }
 }
 
+unsafe impl UnsafeInit for StagingExprObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+        }
+    }
+}
+
 tvm_ffi::impl_object_upcast!(StagingExpr => Expr);
 // tvm-ffi-stubgen(end)
 
@@ -295,6 +316,14 @@ impl OpaqueExpr {
 impl ShallowCopy for OpaqueExprObj {
     fn shallow_copy(&self) -> Self {
         Self { base: ShallowCopy::shallow_copy(&self.base) }
+    }
+}
+
+unsafe impl UnsafeInit for OpaqueExprObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+        }
     }
 }
 
@@ -694,6 +723,14 @@ impl Constant {
 impl ShallowCopy for ConstantObj {
     fn shallow_copy(&self) -> Self {
         Self { base: ShallowCopy::shallow_copy(&self.base) }
+    }
+}
+
+unsafe impl UnsafeInit for ConstantObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+        }
     }
 }
 
@@ -1586,6 +1623,15 @@ impl Var {
 impl ShallowCopy for VarObj {
     fn shallow_copy(&self) -> Self {
         Self { base: ShallowCopy::shallow_copy(&self.base), name: Clone::clone(&self.name) }
+    }
+}
+
+unsafe impl UnsafeInit for VarObj {
+    unsafe fn drop_defined_fields(this: *mut Self) {
+        unsafe {
+            UnsafeInit::drop_defined_fields(addr_of_mut!((*this).base));
+            drop_if_defined(addr_of_mut!((*this).name));
+        }
     }
 }
 
