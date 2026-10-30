@@ -26,8 +26,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# The tvm-tirx crate is not published yet, so the extension depends on it by path.
-tvm-tirx = { path = "../../rust" }
-
-# Standalone crate: not a member of any enclosing workspace.
-[workspace]
+tvm-tirx = "0.1.0-alpha.5"

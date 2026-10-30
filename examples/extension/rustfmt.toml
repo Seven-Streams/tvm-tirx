@@ -15,7 +15,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Match the layout `tvm-ffi-stubgen --target rust` emits, so `cargo fmt` leaves
-# the generated blocks byte-identical and `tvm-ffi-stubgen --check` stays clean.
+# Keep calls and method chains on one line up to the 100-column limit.
 use_small_heuristics = "Max"
-reorder_imports = false

@@ -30,14 +30,12 @@ pipeline. The tutorial in `docs/advanced/` walks through the code.
 
 ## Install and Run
 
-Install TIRx from source with LLVM enabled, and Rust 1.84 or newer. From the
-repository root:
+With Rust 1.84 or newer, from the repository root:
 
 ```bash
-uv pip install scikit-build-core
-uv pip install --no-build-isolation examples/extension
-uv run --no-sync python examples/extension/run_example.py
+pip install ./examples/extension
+python examples/extension/run_example.py
 ```
 
-`--no-build-isolation` builds against the TIRx in the project environment,
-whose `tvm-tirx-config` and `tvm-ffi-config` the cargo build runs.
+The build compiles the library against the published `tvm-tirx` crate and the
+`apache-tvm-tirx` package, which the extension also depends on at run time.
