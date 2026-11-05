@@ -24,12 +24,12 @@
 //! # Examples
 //!
 //! ```
-//! use tvm_tirx::ir::{Expr, PrimType, Var, UNKNOWN_LOC};
+//! use tvm_tirx::ir::{Expr, PrimType, PrimVar, Var, UNKNOWN_LOC};
 //! use tvm_tirx::tirx::analysis;
 //! use tvm_tirx::tvm_ffi::ObjectRefCore;
 //!
-//! let x = Var::new("x", PrimType::int(32), UNKNOWN_LOC);
-//! let y = Var::new("y", PrimType::int(32), UNKNOWN_LOC);
+//! let x = PrimVar::new("x", PrimType::int(32), UNKNOWN_LOC);
+//! let y = PrimVar::new("y", PrimType::int(32), UNKNOWN_LOC);
 //! let sum: Expr = (&x + &y).try_into()?;
 //! let undefined = analysis::undefined_vars(sum, [&x])?;
 //! assert!(undefined.len() == 1 && undefined.get(0)?.same_as(&y));
@@ -38,7 +38,8 @@
 
 // Names the hand-written wrappers use: the import section keeps them even when no generated block
 // does.
-// tvm-ffi-stubgen(import-object): crate::ir::expr::Expr
+// tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
+// tvm-ffi-stubgen(import-object): crate::ir::expr::PrimVar
 // tvm-ffi-stubgen(import-object): crate::ir::expr::Var
 // tvm-ffi-stubgen(import-object): crate::ir::module::IRModule
 // tvm-ffi-stubgen(import-object): crate::tirx::function::Function
@@ -46,14 +47,16 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Array
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
+// tvm-ffi-stubgen(import-object): std::borrow::Borrow
 
 // tvm-ffi-stubgen(begin): import-section
-use std::borrow::Borrow;
-use crate::ir::expr::Expr;
 use crate::ir::expr::IntoExpr;
+use crate::ir::expr::PrimExpr;
+use crate::ir::expr::PrimVar;
 use crate::ir::expr::Var;
 use crate::ir::module::IRModule;
 use crate::tirx::function::Function;
+use std::borrow::Borrow;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
 use tvm_ffi::Result;
@@ -101,10 +104,10 @@ pub fn check_well_formed_module(module: impl Into<IRModule>, assert_mode: bool) 
 /// Return the coefficients `c` of `expr = sum(vars[i] * c[i]) + c[n]`, each invariant of `vars`, or
 /// an empty array if `expr` has no such form (`tirx.analysis.DetectLinearEquation`).
 pub fn detect_linear_equation(
-    expr: impl IntoExpr,
-    vars: impl IntoIterator<Item = impl Into<Var>>,
-) -> Result<Array<Expr>> {
-    let vars = vars.into_iter().map(Into::into).collect::<Array<Var>>();
+    expr: impl IntoExpr<PrimExpr>,
+    vars: impl IntoIterator<Item = impl Into<PrimVar>>,
+) -> Result<Array<PrimExpr>> {
+    let vars = vars.into_iter().map(Into::into).collect::<Array<PrimVar>>();
     tvm_ffi::cached_global_func!("tirx.analysis.DetectLinearEquation")
         .call_tuple((expr.into_expr()?.borrow(), &vars))?
         .try_into()
@@ -114,10 +117,10 @@ pub fn detect_linear_equation(
 /// with `None` for no bound, or an empty array if `expr` is not a clip bound
 /// (`tirx.analysis.DetectClipBound`).
 pub fn detect_clip_bound(
-    expr: impl IntoExpr,
-    vars: impl IntoIterator<Item = impl Into<Var>>,
-) -> Result<Array<Option<Expr>>> {
-    let vars = vars.into_iter().map(Into::into).collect::<Array<Var>>();
+    expr: impl IntoExpr<PrimExpr>,
+    vars: impl IntoIterator<Item = impl Into<PrimVar>>,
+) -> Result<Array<Option<PrimExpr>>> {
+    let vars = vars.into_iter().map(Into::into).collect::<Array<PrimVar>>();
     tvm_ffi::cached_global_func!("tirx.analysis.DetectClipBound")
         .call_tuple((expr.into_expr()?.borrow(), &vars))?
         .try_into()

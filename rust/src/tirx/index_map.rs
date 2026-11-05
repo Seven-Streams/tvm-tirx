@@ -25,18 +25,20 @@
 //! # Examples
 //!
 //! ```
-//! use tvm_tirx::ir::{Expr, PrimType, Var, UNKNOWN_LOC};
+//! use tvm_tirx::ir::{PrimExpr, PrimType, PrimVar, UNKNOWN_LOC};
 //! use tvm_tirx::script::script;
 //! use tvm_tirx::tirx::IndexMap;
 //! use tvm_tirx::tvm_ffi::{Array, Result};
 //!
-//! let i = Var::new("i", PrimType::int(32), UNKNOWN_LOC);
-//! let j = Var::new("j", PrimType::int(32), UNKNOWN_LOC);
-//! let final_indices = Array::from_vec(vec![Expr::from(&j), Expr::from(&i)]);
-//! let transpose = IndexMap::new(Array::from_vec(vec![i, j]), final_indices, None);
+//! let i = PrimVar::new("i", PrimType::int(32), UNKNOWN_LOC);
+//! let j = PrimVar::new("j", PrimType::int(32), UNKNOWN_LOC);
+//! let final_indices = Array::from_vec(vec![PrimExpr::from(&j), PrimExpr::from(&i)]);
+//! let initial_indices = Array::from_vec(vec![i, j]);
+//! let transpose = IndexMap::new(initial_indices, final_indices, None);
 //! assert_eq!(script(&transpose)?, "T.index_map(lambda i, j: (j, i))");
 //!
-//! let text = |exprs: Array<Expr>| exprs.iter().map(|e| script(&e)).collect::<Result<Vec<_>>>();
+//! let text =
+//!     |exprs: Array<PrimExpr>| exprs.iter().map(|e| script(&e)).collect::<Result<Vec<_>>>();
 //! assert_eq!(text(transpose.map_indices([1, 2], None)?)?, ["2", "1"]);
 //!
 //! # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
@@ -50,12 +52,18 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): tvm_ffi::Tensor
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
-
+// tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
+// The indices a map computes are `PrimExpr`s, as C++ `IndexMapObj` holds them.
+// tvm-ffi-stubgen(field): tirx.IndexMap.final_indices -> Array<PrimExpr>
+// Its indices are `PrimVar`s, as C++ `IndexMapObj` holds them.
+// tvm-ffi-stubgen(import-object): crate::ir::expr::PrimVar
+// tvm-ffi-stubgen(import-object): tvm_ffi::Array
+// tvm-ffi-stubgen(field): tirx.IndexMap.initial_indices -> Array<PrimVar>
 // tvm-ffi-stubgen(begin): import-section
-use crate::ir::expr::Expr;
 use crate::ir::expr::IntoExpr;
+use crate::ir::expr::PrimExpr;
+use crate::ir::expr::PrimVar;
 use crate::ir::expr::Range;
-use crate::ir::expr::Var;
 use crate::sym::analyzer::Analyzer;
 use std::ops::Deref;
 use tvm_ffi::Any;
@@ -75,8 +83,8 @@ use tvm_ffi::object::ObjectRef;
 #[type_final]
 pub struct IndexMapObj {
     base: Object,
-    pub initial_indices: Array<Var>,
-    pub final_indices: Array<Expr>,
+    pub initial_indices: Array<PrimVar>,
+    pub final_indices: Array<PrimExpr>,
     pub inverse_index_map: Option<ObjectRef>,
 }
 
@@ -100,8 +108,8 @@ impl Deref for IndexMap {
 
 impl IndexMapObj {
     pub(crate) fn new(
-        initial_indices: Array<Var>,
-        final_indices: Array<Expr>,
+        initial_indices: Array<PrimVar>,
+        final_indices: Array<PrimExpr>,
         inverse_index_map: Option<ObjectRef>,
     ) -> Self {
         let base = Object::new();
@@ -112,8 +120,8 @@ impl IndexMapObj {
 impl IndexMap {
     /// Lossless complete-field allocation.
     pub fn new(
-        initial_indices: impl Into<Array<Var>>,
-        final_indices: impl Into<Array<Expr>>,
+        initial_indices: impl Into<Array<PrimVar>>,
+        final_indices: impl Into<Array<PrimExpr>>,
         inverse_index_map: impl Into<Option<ObjectRef>>,
     ) -> Self {
         let obj = IndexMapObj::new(
@@ -136,11 +144,13 @@ impl IndexMap {
     /// Returns an error if the number of indices differs from that of `initial_indices`.
     pub fn map_indices(
         &self,
-        indices: impl IntoIterator<Item = impl IntoExpr>,
+        indices: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         analyzer: Option<&Analyzer>,
-    ) -> Result<Array<Expr>> {
-        let indices =
-            indices.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
+    ) -> Result<Array<PrimExpr>> {
+        let indices = indices
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.IndexMapMapIndices")
             .call_tuple((self, &indices, analyzer.cloned()))?
             .try_into()
@@ -153,11 +163,13 @@ impl IndexMap {
     /// Returns an error if the number of extents differs from that of `initial_indices`.
     pub fn map_shape(
         &self,
-        shape: impl IntoIterator<Item = impl IntoExpr>,
+        shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         analyzer: Option<&Analyzer>,
-    ) -> Result<Array<Expr>> {
-        let shape =
-            shape.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
+    ) -> Result<Array<PrimExpr>> {
+        let shape = shape
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.IndexMapMapShape")
             .call_tuple((self, &shape, analyzer.cloned()))?
             .try_into()
@@ -198,7 +210,7 @@ impl IndexMap {
         &self,
         ranges: impl IntoIterator<Item = impl Into<Range>>,
         analyzer: Option<&Analyzer>,
-    ) -> Result<(IndexMap, Expr)> {
+    ) -> Result<(IndexMap, PrimExpr)> {
         let ranges = ranges.into_iter().map(Into::into).collect::<Array<Range>>();
         let pair: Array<Any> = tvm_ffi::cached_global_func!("tirx.IndexMapNonSurjectiveInverse")
             .call_tuple((self, &ranges, analyzer.cloned()))?

@@ -27,7 +27,7 @@
 //! # Examples
 //!
 //! ```
-//! use tvm_tirx::ir::{PrimType, Var, UNKNOWN_LOC};
+//! use tvm_tirx::ir::{PrimType, PrimVar, Var, UNKNOWN_LOC};
 //! use tvm_tirx::script::script;
 //! use tvm_tirx::sym::Analyzer;
 //! use tvm_tirx::tirx::{Axis, Iter, Layout, TileLayout};
@@ -38,8 +38,8 @@
 //! let layout = Layout::from(&TileLayout::new(shard, Vec::<Iter>::new(), &Map::new()));
 //! assert_eq!(script(&layout.size(None)?)?, "64");
 //!
-//! let i = Var::new("i", PrimType::int(32), UNKNOWN_LOC);
-//! let j = Var::new("j", PrimType::int(32), UNKNOWN_LOC);
+//! let i = PrimVar::new("i", PrimType::int(32), UNKNOWN_LOC);
+//! let j = PrimVar::new("j", PrimType::int(32), UNKNOWN_LOC);
 //! let offset = layout.apply([&i, &j], &Analyzer::new())?.get(&"m".into())?.unwrap();
 //! assert_eq!(script(&offset)?, "i * 8 + j");
 //! # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
@@ -53,14 +53,21 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::String
 // tvm-ffi-stubgen(import-object): crate::ir::support
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
-
+// tvm-ffi-stubgen(import-object): std::borrow::Borrow
+// tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
+// An iterator's extent and stride are `PrimExpr`s, as C++ `IterObj` holds them.
+// tvm-ffi-stubgen(field): tirx.Iter.extent -> PrimExpr
+// tvm-ffi-stubgen(field): tirx.Iter.stride -> PrimExpr
+// A tile layout's offsets are `PrimExpr`s, as C++ `TileLayoutObj` holds them.
+// tvm-ffi-stubgen(field): tirx.TileLayout.offset -> Map<Axis, PrimExpr>
+// tvm-ffi-stubgen(import-object): tvm_ffi::Map
 // tvm-ffi-stubgen(begin): import-section
-use std::borrow::Borrow;
-use crate::ir::expr::Expr;
 use crate::ir::expr::IntoExpr;
+use crate::ir::expr::PrimExpr;
 use crate::ir::support;
 use crate::sym::analyzer::Analyzer;
 use crate::tirx::thread_scope::ThreadScope;
+use std::borrow::Borrow;
 use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
@@ -119,7 +126,7 @@ impl Layout {
 
     /// Return the number of elements the layout maps, along `axis_name` if given
     /// (`tirx.LayoutGetSize`).
-    pub fn size(&self, axis_name: Option<&str>) -> Result<Expr> {
+    pub fn size(&self, axis_name: Option<&str>) -> Result<PrimExpr> {
         tvm_ffi::cached_global_func!("tirx.LayoutGetSize")
             .call_tuple((self, axis_name.map(String::from)))?
             .try_into()
@@ -127,7 +134,7 @@ impl Layout {
 
     /// Return the extent of the coordinates the layout reaches, along `axis_name` if given
     /// (`tirx.LayoutGetSpan`).
-    pub fn span(&self, axis_name: Option<&str>) -> Result<Expr> {
+    pub fn span(&self, axis_name: Option<&str>) -> Result<PrimExpr> {
         tvm_ffi::cached_global_func!("tirx.LayoutGetSpan")
             .call_tuple((self, axis_name.map(String::from)))?
             .try_into()
@@ -140,11 +147,13 @@ impl Layout {
     /// Returns an error if `coord` does not have one index for each iterator of the shard.
     pub fn apply(
         &self,
-        coord: impl IntoIterator<Item = impl IntoExpr>,
+        coord: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         analyzer: &Analyzer,
-    ) -> Result<Map<String, Expr>> {
-        let coord =
-            coord.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
+    ) -> Result<Map<String, PrimExpr>> {
+        let coord = coord
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutApply")
             .call_tuple((self, &coord, analyzer))?
             .try_into()
@@ -154,9 +163,9 @@ impl Layout {
     /// (`tirx.LayoutApplyLinear`).
     pub fn apply_linear(
         &self,
-        coord: impl IntoExpr,
+        coord: impl IntoExpr<PrimExpr>,
         analyzer: &Analyzer,
-    ) -> Result<Map<String, Expr>> {
+    ) -> Result<Map<String, PrimExpr>> {
         tvm_ffi::cached_global_func!("tirx.LayoutApplyLinear")
             .call_tuple((self, coord.into_expr()?.borrow(), analyzer))?
             .try_into()
@@ -166,14 +175,18 @@ impl Layout {
     /// (`tirx.LayoutApplyWithShape`).
     pub fn apply_with_shape(
         &self,
-        coord: impl IntoIterator<Item = impl IntoExpr>,
-        shape: impl IntoIterator<Item = impl IntoExpr>,
+        coord: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
+        shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         analyzer: &Analyzer,
-    ) -> Result<Map<String, Expr>> {
-        let coord =
-            coord.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
-        let shape =
-            shape.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
+    ) -> Result<Map<String, PrimExpr>> {
+        let coord = coord
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
+        let shape = shape
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutApplyWithShape")
             .call_tuple((self, &coord, &shape, analyzer))?
             .try_into()
@@ -194,18 +207,18 @@ impl Layout {
     pub fn tile(
         &self,
         outer: impl Into<TileLayout>,
-        outer_shape: impl IntoIterator<Item = impl IntoExpr>,
-        inner_shape: impl IntoIterator<Item = impl IntoExpr>,
+        outer_shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
+        inner_shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
     ) -> Result<Layout> {
         let outer = outer.into();
         let outer_shape = outer_shape
             .into_iter()
             .map(IntoExpr::into_owned_expr)
-            .collect::<Result<Array<Expr>>>()?;
+            .collect::<Result<Array<PrimExpr>>>()?;
         let inner_shape = inner_shape
             .into_iter()
             .map(IntoExpr::into_owned_expr)
-            .collect::<Result<Array<Expr>>>()?;
+            .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutTile")
             .call_tuple((self, &outer, &outer_shape, &inner_shape))?
             .try_into()
@@ -251,7 +264,7 @@ impl TileLayoutObj {
         FieldGetter::new(Self::type_index(), "replica")?.get(self)
     }
 
-    pub fn offset(&self) -> Result<Map<Axis, Expr>> {
+    pub fn offset(&self) -> Result<Map<Axis, PrimExpr>> {
         FieldGetter::new(Self::type_index(), "offset")?.get(self)
     }
 }
@@ -265,7 +278,7 @@ impl TileLayout {
     pub fn new(
         shard: impl IntoIterator<Item = impl Into<Iter>>,
         replica: impl IntoIterator<Item = impl Into<Iter>>,
-        offset: &Map<Axis, Expr>,
+        offset: &Map<Axis, PrimExpr>,
     ) -> Self {
         let shard = shard.into_iter().map(Into::into).collect::<Array<Iter>>();
         let replica = replica.into_iter().map(Into::into).collect::<Array<Iter>>();
@@ -297,10 +310,12 @@ impl TileLayout {
     /// Returns an error if the iterators cannot be split into groups of the extents of `shape`.
     pub fn group(
         &self,
-        shape: impl IntoIterator<Item = impl IntoExpr>,
+        shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
     ) -> Result<(TileLayout, Array<i64>)> {
-        let shape =
-            shape.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
+        let shape = shape
+            .into_iter()
+            .map(IntoExpr::into_owned_expr)
+            .collect::<Result<Array<PrimExpr>>>()?;
         let pair: Array<Any> = tvm_ffi::cached_global_func!("tirx.TileLayoutGroup")
             .call_tuple((self, &shape))?
             .try_into()?;
@@ -330,8 +345,8 @@ impl TileLayout {
 #[type_final]
 pub struct IterObj {
     base: Object,
-    pub extent: Expr,
-    pub stride: Expr,
+    pub extent: PrimExpr,
+    pub stride: PrimExpr,
     pub axis: Axis,
 }
 
@@ -354,7 +369,7 @@ impl Deref for Iter {
 }
 
 impl IterObj {
-    pub(crate) fn new(extent: Expr, stride: Expr, axis: Axis) -> Self {
+    pub(crate) fn new(extent: PrimExpr, stride: PrimExpr, axis: Axis) -> Self {
         let base = Object::new();
         Self { base, extent, stride, axis }
     }
@@ -362,7 +377,11 @@ impl IterObj {
 
 impl Iter {
     /// Lossless complete-field allocation.
-    pub fn new(extent: impl Into<Expr>, stride: impl Into<Expr>, axis: impl Into<Axis>) -> Self {
+    pub fn new(
+        extent: impl Into<PrimExpr>,
+        stride: impl Into<PrimExpr>,
+        axis: impl Into<Axis>,
+    ) -> Self {
         let obj = IterObj::new(extent.into(), stride.into(), axis.into());
         Self { base: ObjectArc::new(obj) }
     }
