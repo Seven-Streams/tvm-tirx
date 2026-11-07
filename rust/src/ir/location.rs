@@ -31,11 +31,13 @@
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::support
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::support;
 use std::ops::Deref;
 use std::ptr::addr_of_mut;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::Result;
@@ -47,8 +49,7 @@ use tvm_ffi::UnsafeInit;
 /// Where an IR node comes from, for diagnostics: an [`UnknownLoc`], a [`SourceLoc`] or a
 /// [`CallSiteLoc`].
 ///
-/// A constructor takes its `loc` as any `impl Into<Location>`, such as a `SourceLoc` or
-/// [`UNKNOWN_LOC`].
+/// A constructor takes its `loc` as any location, such as a `SourceLoc` or [`UNKNOWN_LOC`].
 ///
 /// # Examples
 ///
@@ -166,8 +167,8 @@ impl UnknownLoc {
     }
 }
 
-/// A marker for the unknown location as the `loc` argument of a constructor, which takes any
-/// `impl Into<Location>`: `Var::new("x", ty, UNKNOWN_LOC)`.
+/// A marker for the unknown location as the `loc` argument of a constructor:
+/// `Var::new("x", ty, UNKNOWN_LOC)`.
 ///
 /// [`UnknownLoc::new`] is the same location as a value.
 #[derive(Clone, Copy, Debug)]
@@ -179,6 +180,15 @@ pub const UNKNOWN_LOC: Unknown = Unknown;
 impl From<Unknown> for Location {
     fn from(_: Unknown) -> Self {
         UnknownLoc::new().into()
+    }
+}
+
+// As `From` converts it, so the marker passes wherever a location reference does.
+impl IntoObjectRef<Location> for Unknown {
+    type Output = Location;
+
+    fn into_object_ref(self) -> Location {
+        self.into()
     }
 }
 

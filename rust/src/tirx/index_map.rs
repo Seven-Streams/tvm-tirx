@@ -59,6 +59,7 @@
 // Its indices are `PrimVar`s, as C++ `IndexMapObj` holds them.
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimVar
 // tvm-ffi-stubgen(import-object): tvm_ffi::Array
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 // tvm-ffi-stubgen(field): tirx.IndexMap.initial_indices -> Array<PrimVar>
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::IntoExpr;
@@ -68,6 +69,7 @@ use crate::ir::expr::Range;
 use crate::sym::analyzer::Analyzer;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::Result;
@@ -140,12 +142,14 @@ impl IndexMap {
     /// `inverse_index_map` if it is known (C++ `IndexMap(initial_indices, final_indices,
     /// inverse_index_map)`).
     pub fn new(
-        initial_indices: impl IntoIterator<Item = impl Into<PrimVar>>,
+        initial_indices: impl IntoIterator<Item = impl IntoObjectRef<PrimVar>>,
         final_indices: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         inverse_index_map: Option<&IndexMap>,
     ) -> Result<Self> {
-        let initial_indices =
-            initial_indices.into_iter().map(Into::into).collect::<Array<PrimVar>>();
+        let initial_indices = initial_indices
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<PrimVar>>();
         let final_indices = final_indices
             .into_iter()
             .map(IntoExpr::into_owned_expr)
@@ -212,10 +216,11 @@ impl IndexMap {
     /// provably bijective over `ranges`.
     pub fn inverse(
         &self,
-        ranges: impl IntoIterator<Item = impl Into<Range>>,
+        ranges: impl IntoIterator<Item = impl IntoObjectRef<Range>>,
         analyzer: Option<&Analyzer>,
     ) -> Result<IndexMap> {
-        let ranges = ranges.into_iter().map(Into::into).collect::<Array<Range>>();
+        let ranges =
+            ranges.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Range>>();
         tvm_ffi::cached_global_func!("tirx.IndexMapInverse")
             .call_tuple((self, &ranges, analyzer.cloned()))?
             .try_into()
@@ -225,10 +230,11 @@ impl IndexMap {
     /// maps to an index in `ranges` (`tirx.IndexMapNonSurjectiveInverse`).
     pub fn non_surjective_inverse(
         &self,
-        ranges: impl IntoIterator<Item = impl Into<Range>>,
+        ranges: impl IntoIterator<Item = impl IntoObjectRef<Range>>,
         analyzer: Option<&Analyzer>,
     ) -> Result<(IndexMap, PrimExpr)> {
-        let ranges = ranges.into_iter().map(Into::into).collect::<Array<Range>>();
+        let ranges =
+            ranges.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Range>>();
         let pair: Array<Any> = tvm_ffi::cached_global_func!("tirx.IndexMapNonSurjectiveInverse")
             .call_tuple((self, &ranges, analyzer.cloned()))?
             .try_into()?;

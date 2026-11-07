@@ -62,6 +62,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::prim::op::cast
 // tvm-ffi-stubgen(import-object): crate::ir::dtype::with_lanes
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::dtype::with_lanes;
@@ -84,6 +85,7 @@ use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::DLDataTypeCode;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
@@ -189,7 +191,7 @@ impl Ramp {
         base: impl IntoExpr<PrimExpr>,
         stride: impl IntoExpr<PrimExpr>,
         lanes: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let (base, stride, lanes) =
             (base.into_owned_expr()?, stride.into_owned_expr()?, lanes.into_owned_expr()?);
@@ -219,7 +221,7 @@ impl Ramp {
             false => cast(stride, base_ty.clone())?,
         };
         let (ty, lanes) = vector_lanes(&base_ty, lanes)?;
-        Ok(Self::from_fields(loc.into(), ty, base, stride, lanes))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, base, stride, lanes))
     }
 }
 
@@ -295,14 +297,14 @@ impl Broadcast {
     pub fn new(
         value: impl IntoExpr<PrimExpr>,
         lanes: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let (value, lanes) = (value.into_owned_expr()?, lanes.into_owned_expr()?);
         if !value.prim_ty().is_scalar() {
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, "value_ty.IsScalar()", ""));
         }
         let (ty, lanes) = vector_lanes(value.prim_ty(), lanes)?;
-        Ok(Self::from_fields(loc.into(), ty, value, lanes))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, value, lanes))
     }
 }
 
@@ -384,7 +386,7 @@ impl Shuffle {
     pub fn new(
         vectors: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         indices: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let vectors = vectors
             .into_iter()
@@ -422,7 +424,7 @@ impl Shuffle {
             ));
         }
         let ty = PrimType::try_from(with_lanes(base_dtype, indices.len() as u16))?;
-        Ok(Self::from_fields(loc.into(), ty, vectors, indices))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, vectors, indices))
     }
 }
 

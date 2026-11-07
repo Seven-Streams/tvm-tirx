@@ -45,12 +45,16 @@
 // does.
 // tvm-ffi-stubgen(import-object): tvm_ffi::Module
 // tvm-ffi-stubgen(import-object): crate::ir::module::IRModule
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
+// tvm-ffi-stubgen(import-object): std::borrow::Borrow
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::module::IRModule;
+use std::borrow::Borrow;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Module;
 use tvm_ffi::Object;
@@ -294,9 +298,13 @@ pub fn register_tag(name: &str, config: &Map<String, Any>, override_: bool) -> R
 /// # Errors
 ///
 /// Returns an error if the code generator is not built in, or the error it raises.
-pub fn build(kind: &str, module: impl Into<IRModule>, target: impl Into<Target>) -> Result<Module> {
+pub fn build(
+    kind: &str,
+    module: impl IntoObjectRef<IRModule>,
+    target: impl IntoObjectRef<Target>,
+) -> Result<Module> {
     // The code generators are looked up by name: which ones exist depends on the build.
     tvm_ffi::Function::get_global(&format!("target.build.{kind}"))?
-        .call_tuple((&module.into(), &target.into()))?
+        .call_tuple((&module.into_owned_object_ref(), target.into_object_ref().borrow()))?
         .try_into()
 }

@@ -36,6 +36,7 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Result
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 // tvm-ffi-stubgen(import-object): std::borrow::Borrow
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::attrs::Attrs;
@@ -48,6 +49,7 @@ use crate::tirx::thread_scope::ThreadScope;
 use std::borrow::Borrow;
 use std::ops::Deref;
 use tvm_ffi::Array;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::Optional;
 use tvm_ffi::Result;
@@ -252,11 +254,11 @@ pub fn as_tensor_region(value: impl IntoExpr) -> Result<TensorRegion> {
 /// # Ok::<(), tvm_tirx::tvm_ffi::Error>(())
 /// ```
 pub fn configure_tensor_instruction(
-    op: impl Into<Op>,
+    op: impl IntoObjectRef<Op>,
     validator: impl Fn(Call) -> Result<()> + Send + Sync + 'static,
 ) -> Result<()> {
     let validator = tvm_ffi::Function::from_typed(validator);
     tvm_ffi::cached_global_func!("tirx.ConfigureTensorInstruction")
-        .call_tuple((&op.into(), &validator))?;
+        .call_tuple((op.into_object_ref().borrow(), &validator))?;
     Ok(())
 }

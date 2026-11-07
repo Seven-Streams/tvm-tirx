@@ -68,6 +68,7 @@
 // tvm-ffi-stubgen(field): sym.IterMapResult.padding_predicate -> PrimExpr
 // tvm-ffi-stubgen(nullable): sym.IterMapResult.padding_predicate
 // tvm-ffi-stubgen(import-object): std::borrow::Borrow
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 // tvm-ffi-stubgen(field): sym.IterSplitExpr.lower_factor -> PrimExpr
 // tvm-ffi-stubgen(field): sym.IterSplitExpr.extent -> PrimExpr
 // tvm-ffi-stubgen(field): sym.IterSplitExpr.scale -> PrimExpr
@@ -87,6 +88,7 @@ use std::ops::Deref;
 use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -324,14 +326,14 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(IterSumExpr => Expr, IterSumExpr => Iter
 impl IterSplitExpr {
     /// Create the split `(source // lower_factor) % extent * scale` (`sym.IterSplitExpr`).
     pub fn new(
-        source: impl Into<IterMark>,
+        source: impl IntoObjectRef<IterMark>,
         lower_factor: impl IntoExpr<PrimExpr>,
         extent: impl IntoExpr<PrimExpr>,
         scale: impl IntoExpr<PrimExpr>,
     ) -> Result<Self> {
         tvm_ffi::cached_global_func!("sym.IterSplitExpr")
             .call_tuple((
-                &source.into(),
+                source.into_object_ref().borrow(),
                 lower_factor.into_expr()?.borrow(),
                 extent.into_expr()?.borrow(),
                 scale.into_expr()?.borrow(),
@@ -343,13 +345,16 @@ impl IterSplitExpr {
 impl IterSumExpr {
     /// Create the sum of the splits `args` plus `base` (`sym.IterSumExpr`).
     pub fn new(
-        args: impl IntoIterator<Item = impl Into<IterSplitExpr>>,
-        base: impl Into<PrimExpr>,
+        args: impl IntoIterator<Item = impl IntoObjectRef<IterSplitExpr>>,
+        base: impl IntoObjectRef<PrimExpr>,
     ) -> Self {
-        let args = args.into_iter().map(Into::into).collect::<Array<IterSplitExpr>>();
+        let args = args
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<IterSplitExpr>>();
         support::infallible(
             tvm_ffi::cached_global_func!("sym.IterSumExpr")
-                .call_tuple((&args, &base.into()))
+                .call_tuple((&args, base.into_object_ref().borrow()))
                 .and_then(|any| any.try_into()),
         )
     }
@@ -447,7 +452,7 @@ pub fn normalize_iter_map_to_expr(expr: impl IntoExpr<PrimExpr>) -> Result<PrimE
 pub fn subspace_divide(
     bindings: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
     input_iters: &Map<PrimVar, Range>,
-    sub_iters: impl IntoIterator<Item = impl Into<PrimVar>>,
+    sub_iters: impl IntoIterator<Item = impl IntoObjectRef<PrimVar>>,
     predicate: impl IntoExpr<PrimExpr>,
     check_level: IterMapLevel,
     analyzer: Option<&Analyzer>,
@@ -455,7 +460,8 @@ pub fn subspace_divide(
 ) -> Result<Array<Array<IterMark>>> {
     let bindings =
         bindings.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<PrimExpr>>>()?;
-    let sub_iters = sub_iters.into_iter().map(Into::into).collect::<Array<PrimVar>>();
+    let sub_iters =
+        sub_iters.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<PrimVar>>();
     let (predicate, analyzer) = (predicate.into_owned_expr()?, analyzer.cloned());
     tvm_ffi::cached_global_func!("sym.SubspaceDivide")
         .call_packed(&[
@@ -473,10 +479,13 @@ pub fn subspace_divide(
 /// Return the inputs of the bijective iterator map `iter_map` as expressions of its `outputs`
 /// (`sym.InverseAffineIterMap`).
 pub fn inverse_affine_iter_map(
-    iter_map: impl IntoIterator<Item = impl Into<IterSumExpr>>,
+    iter_map: impl IntoIterator<Item = impl IntoObjectRef<IterSumExpr>>,
     outputs: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
 ) -> Result<Map<Var, PrimExpr>> {
-    let iter_map = iter_map.into_iter().map(Into::into).collect::<Array<IterSumExpr>>();
+    let iter_map = iter_map
+        .into_iter()
+        .map(IntoObjectRef::into_owned_object_ref)
+        .collect::<Array<IterSumExpr>>();
     let outputs =
         outputs.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<PrimExpr>>>()?;
     tvm_ffi::cached_global_func!("sym.InverseAffineIterMap")

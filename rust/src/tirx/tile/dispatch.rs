@@ -56,6 +56,8 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimVar
 // tvm-ffi-stubgen(import-object): tvm_ffi::Array
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
+// tvm-ffi-stubgen(import-object): std::borrow::Borrow
 // The axis extents and offsets are `PrimExpr`s, as C++ `DispatchContextObj` holds them.
 // tvm-ffi-stubgen(field): tirx.DispatchContext.inter -> Map<String, Array<PrimExpr>>
 // tvm-ffi-stubgen(field): tirx.DispatchContext.intra -> Map<String, Array<PrimExpr>>
@@ -69,10 +71,12 @@ use crate::ir::expr::Var;
 use crate::ir::stmt::Stmt;
 use crate::target::Target;
 use crate::tirx::thread_scope::ThreadScope;
+use std::borrow::Borrow;
 use tvm_ffi::Any;
 use tvm_ffi::AnyView;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -161,8 +165,8 @@ impl DispatchContext {
     /// is neither empty nor the local name of `thread_scope`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        target: impl Into<Target>,
-        thread_scope: impl Into<ThreadScope>,
+        target: impl IntoObjectRef<Target>,
+        thread_scope: impl IntoObjectRef<ThreadScope>,
         launch_params: impl IntoIterator<Item = (impl AsRef<str>, PrimVar, PrimExpr)>,
         var_range_map: &Map<Var, Range>,
         alloc_only: bool,
@@ -172,7 +176,7 @@ impl DispatchContext {
         intra: &Map<String, Array<PrimExpr>>,
         scope_kind: &str,
     ) -> Result<Self> {
-        let (target, thread_scope) = (target.into(), thread_scope.into());
+        let (target, thread_scope) = (target.into_object_ref(), thread_scope.into_object_ref());
         let launch_params = launch_params
             .into_iter()
             .map(|(name, var, extent)| {
@@ -182,8 +186,8 @@ impl DispatchContext {
         let scope_kind = String::from(scope_kind);
         tvm_ffi::cached_global_func!("tirx.DispatchContext")
             .call_packed(&[
-                AnyView::from(&target),
-                AnyView::from(&thread_scope),
+                AnyView::from(target.borrow()),
+                AnyView::from(thread_scope.borrow()),
                 AnyView::from(&launch_params),
                 AnyView::from(var_range_map),
                 AnyView::from(&alloc_only),
@@ -201,18 +205,18 @@ impl DispatchContext {
     /// (`tirx.DispatchContextAddAllocTensor`).
     pub fn add_alloc_tensor(
         &self,
-        tensor: impl Into<Var>,
+        tensor: impl IntoObjectRef<Var>,
         allocated_addr: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         annotations: &Map<String, Any>,
     ) -> Result<()> {
-        let tensor = tensor.into();
+        let tensor = tensor.into_object_ref();
         let allocated_addr = allocated_addr
             .into_iter()
             .map(IntoExpr::into_owned_expr)
             .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.DispatchContextAddAllocTensor").call_tuple((
             self,
-            &tensor,
+            tensor.borrow(),
             &allocated_addr,
             annotations,
         ))?;
@@ -221,10 +225,10 @@ impl DispatchContext {
 
     /// Request `stmt` at the start of the host code if `host`, else of the kernel
     /// (`tirx.DispatchContextAddInitStmt`).
-    pub fn add_init_stmt(&self, stmt: impl Into<Stmt>, host: bool) -> Result<()> {
+    pub fn add_init_stmt(&self, stmt: impl IntoObjectRef<Stmt>, host: bool) -> Result<()> {
         tvm_ffi::cached_global_func!("tirx.DispatchContextAddInitStmt").call_tuple((
             self,
-            &stmt.into(),
+            stmt.into_object_ref().borrow(),
             host,
         ))?;
         Ok(())
@@ -234,13 +238,13 @@ impl DispatchContext {
     /// (`tirx.DispatchContextAddPostTensorDefStmt`).
     pub fn add_post_tensor_def_stmt(
         &self,
-        tensor: impl Into<Var>,
-        stmt: impl Into<Stmt>,
+        tensor: impl IntoObjectRef<Var>,
+        stmt: impl IntoObjectRef<Stmt>,
     ) -> Result<()> {
         tvm_ffi::cached_global_func!("tirx.DispatchContextAddPostTensorDefStmt").call_tuple((
             self,
-            &tensor.into(),
-            &stmt.into(),
+            tensor.into_object_ref().borrow(),
+            stmt.into_object_ref().borrow(),
         ))?;
         Ok(())
     }

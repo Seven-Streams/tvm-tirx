@@ -151,7 +151,7 @@ impl IRModule {
     /// Returns an `InternalError` if two global variables of `functions` have the same name.
     pub fn new(
         functions: &Map<GlobalVar, BaseFunc>,
-        attrs: impl Into<DictAttrs>,
+        attrs: impl IntoObjectRef<DictAttrs>,
         global_infos: &Map<String, Array<GlobalInfo>>,
     ) -> Result<Self> {
         let mut names = std::collections::HashSet::new();
@@ -166,7 +166,12 @@ impl IRModule {
             global_var_map.push((name, var));
         }
         let global_var_map = global_var_map.into_iter().collect::<Map<String, GlobalVar>>();
-        Ok(Self::from_fields(functions.clone(), attrs, global_infos.clone(), global_var_map))
+        Ok(Self::from_fields(
+            functions.clone(),
+            attrs.into_owned_object_ref(),
+            global_infos.clone(),
+            global_var_map,
+        ))
     }
 
     /// Create the module of `functions` and `expr`, a function bound to its `global_symbol`, or to
@@ -194,14 +199,14 @@ impl IRModule {
     /// Returns an `InternalError` if the module has another global variable of the same name.
     pub fn add(
         &self,
-        var: impl Into<GlobalVar>,
-        func: impl Into<BaseFunc>,
+        var: impl IntoObjectRef<GlobalVar>,
+        func: impl IntoObjectRef<BaseFunc>,
         update: bool,
     ) -> Result<()> {
         tvm_ffi::cached_global_func!("ir.IRModuleAdd").call_tuple((
             self,
-            &var.into(),
-            &func.into(),
+            &var.into_owned_object_ref(),
+            &func.into_owned_object_ref(),
             update,
         ))?;
         Ok(())
@@ -300,11 +305,15 @@ impl IRModule {
     /// # Errors
     ///
     /// Returns an `InternalError` if the module has another global variable of the same name.
-    pub fn update_func(&self, var: impl Into<GlobalVar>, func: impl Into<BaseFunc>) -> Result<()> {
+    pub fn update_func(
+        &self,
+        var: impl IntoObjectRef<GlobalVar>,
+        func: impl IntoObjectRef<BaseFunc>,
+    ) -> Result<()> {
         tvm_ffi::cached_global_func!("ir.IRModuleUpdateFunction").call_tuple((
             self,
-            &var.into(),
-            &func.into(),
+            &var.into_owned_object_ref(),
+            &func.into_owned_object_ref(),
         ))?;
         Ok(())
     }
@@ -313,9 +322,12 @@ impl IRModule {
     pub fn update_global_info(
         &self,
         name: &str,
-        global_info: impl IntoIterator<Item = impl Into<GlobalInfo>>,
+        global_info: impl IntoIterator<Item = impl IntoObjectRef<GlobalInfo>>,
     ) -> Result<()> {
-        let global_info = global_info.into_iter().map(Into::into).collect::<Array<GlobalInfo>>();
+        let global_info = global_info
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<GlobalInfo>>();
         tvm_ffi::cached_global_func!("ir.IRModuleUpdateGlobalInfo").call_tuple((
             self,
             String::from(name),

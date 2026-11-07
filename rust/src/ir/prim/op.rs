@@ -80,6 +80,8 @@
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::Type
 // tvm-ffi-stubgen(import-object): crate::ir::support
 // tvm-ffi-stubgen(import-object): crate::sym
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
+// tvm-ffi-stubgen(import-object): std::borrow::Borrow
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Call;
@@ -128,12 +130,14 @@ use crate::ir::r#type::PrimType;
 use crate::ir::r#type::Type;
 use crate::ir::support;
 use crate::sym;
+use std::borrow::Borrow;
 use tvm_ffi::Any;
 use tvm_ffi::BigInt;
 use tvm_ffi::DLDataType;
 use tvm_ffi::DLDataTypeCode;
 use tvm_ffi::Error;
 use tvm_ffi::INTERNAL_ERROR;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
 use tvm_ffi::TYPE_ERROR;
@@ -585,7 +589,7 @@ pub trait PrimOps {
     }
 
     /// Build [`cast`]`(self, ty)`.
-    fn cast(&self, ty: impl Into<PrimType>) -> ExprResult {
+    fn cast(&self, ty: impl IntoObjectRef<PrimType>) -> ExprResult {
         ExprResult(cast(self.to_expr_result(), ty))
     }
 
@@ -777,16 +781,16 @@ unlocated! {
     ///
     /// Returns a `ValueError` if `value` is out of the range of `ty`, or an `InternalError` if it
     /// is negative for an unsigned `ty` or `ty` is not a type of constants, such as `void`.
-    make_const(ty: impl Into<PrimType>, value: impl Into<ConstValue>) => make_const_at;
+    make_const(ty: impl IntoObjectRef<PrimType>, value: impl Into<ConstValue>) => make_const_at;
 }
 
 /// Build [`make_const`] at the location `loc`.
 pub fn make_const_at(
-    ty: impl Into<PrimType>,
+    ty: impl IntoObjectRef<PrimType>,
     value: impl Into<ConstValue>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    let (ty, value, loc) = (ty.into(), value.into(), loc.into());
+    let (ty, value, loc) = (ty.into_owned_object_ref(), value.into(), loc.into_owned_object_ref());
     if !ty.is_scalable_vector() && !ty.is_fixed_length_vector() {
         return make_const_scalar(ty, value, &loc);
     }
@@ -866,16 +870,17 @@ unlocated! {
     ///
     /// Returns a `TypeError` if `value` has the void type, or an `InternalError` if `value` and
     /// `ty` are vectors of different lanes.
-    cast(value: impl IntoExpr<PrimExpr>, ty: impl Into<PrimType>) => cast_at;
+    cast(value: impl IntoExpr<PrimExpr>, ty: impl IntoObjectRef<PrimType>) => cast_at;
 }
 
 /// Build [`cast`] at the location `loc`.
 pub fn cast_at(
     value: impl IntoExpr<PrimExpr>,
-    ty: impl Into<PrimType>,
-    loc: impl Into<Location>,
+    ty: impl IntoObjectRef<PrimType>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    let (value, ty, loc) = (value.into_owned_expr()?, ty.into(), loc.into());
+    let (value, ty, loc) =
+        (value.into_owned_expr()?, ty.into_owned_object_ref(), loc.into_owned_object_ref());
     let from = value.prim_ty().clone();
     if from.dtype == ty.dtype {
         return Ok(value);
@@ -954,9 +959,9 @@ pub fn match_types(
 pub fn match_types_at(
     a: impl IntoExpr<PrimExpr>,
     b: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<(PrimExpr, PrimExpr)> {
-    let (a, b, loc) = (a.into_owned_expr()?, b.into_owned_expr()?, loc.into());
+    let (a, b, loc) = (a.into_owned_expr()?, b.into_owned_expr()?, loc.into_owned_object_ref());
     if a.prim_ty().dtype == b.prim_ty().dtype {
         return Ok((a, b));
     }
@@ -1182,9 +1187,9 @@ macro_rules! folded_binary {
             pub fn $at(
                 a: impl Operand,
                 b: impl Operand,
-                loc: impl Into<Location>,
+                loc: impl IntoObjectRef<Location>,
             ) -> Result<PrimExpr> {
-                let ((a, b), loc) = (operands(a, b)?, loc.into());
+                let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
                 let (a, b) = match_types_at(a, b, loc.clone())?;
                 match $fold(&a, &b)? {
                     Some(folded) => Ok(folded),
@@ -1291,8 +1296,12 @@ unlocated! {
 }
 
 /// Build [`eq`] at the location `loc`.
-pub fn eq_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn eq_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     let (a, b) = match_types_at(a, b, loc.clone())?;
     if let Some(folded) = const_fold::compare(&a, &b, |x, y| x == y, |x, y| x == y)? {
         return Ok(folded);
@@ -1304,8 +1313,8 @@ pub fn eq_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Resu
 }
 
 /// Build [`neg`] at the location `loc`.
-pub fn neg_at(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let (a, loc) = (a.into_owned_expr()?, loc.into());
+pub fn neg_at(a: impl IntoExpr<PrimExpr>, loc: impl IntoObjectRef<Location>) -> Result<PrimExpr> {
+    let (a, loc) = (a.into_owned_expr()?, loc.into_owned_object_ref());
     let ty = a.prim_ty().clone();
     if let Some(imm) = a.downcast_ref::<IntImmObj>() {
         let value = -imm.value.clone();
@@ -1320,15 +1329,23 @@ pub fn neg_at(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<Pr
 }
 
 /// Build [`truncdiv`] at the location `loc`.
-pub fn truncdiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn truncdiv_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
     let (a, b) = operands(a, b)?;
     check_integers(&a, &b)?;
     div_at(a, b, loc)
 }
 
 /// Build [`floordiv`] at the location `loc`.
-pub fn floordiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn floordiv_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     check_integers(&a, &b)?;
     let (a, b) = match_types_at(a, b, loc.clone())?;
     match const_fold::floordiv(&a, &b)? {
@@ -1338,8 +1355,12 @@ pub fn floordiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -
 }
 
 /// Build [`floormod`] at the location `loc`.
-pub fn floormod_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn floormod_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     check_integers(&a, &b)?;
     let (a, b) = match_types_at(a, b, loc.clone())?;
     match const_fold::floormod(&a, &b)? {
@@ -1349,18 +1370,30 @@ pub fn floormod_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -
 }
 
 /// Build [`indexdiv`] at the location `loc`.
-pub fn indexdiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn indexdiv_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
     floordiv_at(a, b, loc)
 }
 
 /// Build [`indexmod`] at the location `loc`.
-pub fn indexmod_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn indexmod_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
     floormod_at(a, b, loc)
 }
 
 /// Build [`ceildiv`] at the location `loc`.
-pub fn ceildiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn ceildiv_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     check_integers(&a, &b)?;
     let (a, b) = match_types_at(a, b, loc.clone())?;
     let sum = add(a, b.clone())?;
@@ -1373,8 +1406,12 @@ pub fn ceildiv_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) ->
 }
 
 /// Build [`min`] at the location `loc`.
-pub fn min_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn min_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     let (pos_inf, neg_inf) = symbolic_infinities();
     if a.same_as(&pos_inf) {
         return Ok(b);
@@ -1396,8 +1433,12 @@ pub fn min_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Res
 }
 
 /// Build [`max`] at the location `loc`.
-pub fn max_at(a: impl Operand, b: impl Operand, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+pub fn max_at(
+    a: impl Operand,
+    b: impl Operand,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     let (pos_inf, neg_inf) = symbolic_infinities();
     if a.same_as(&pos_inf) {
         return Ok(a);
@@ -1499,7 +1540,7 @@ unlocated! {
 pub fn logical_and_at(
     a: impl IntoExpr<PrimExpr>,
     b: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
     let (a, b) = (a.into_owned_expr()?, b.into_owned_expr()?);
     check_operands(&a, &b, "&&", "logical AND", "boolean", (&BOOLEAN, BOOL_CODES))?;
@@ -1513,7 +1554,7 @@ pub fn logical_and_at(
 pub fn logical_or_at(
     a: impl IntoExpr<PrimExpr>,
     b: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
     let (a, b) = (a.into_owned_expr()?, b.into_owned_expr()?);
     check_operands(&a, &b, "||", "logical OR", "boolean", (&BOOLEAN, BOOL_CODES))?;
@@ -1524,7 +1565,10 @@ pub fn logical_or_at(
 }
 
 /// Build [`logical_not`] at the location `loc`.
-pub fn logical_not_at(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn logical_not_at(
+    a: impl IntoExpr<PrimExpr>,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
     let a = a.into_owned_expr()?;
     check_code(&a, "a", &BOOLEAN, BOOL_CODES, || {
         format!(
@@ -1542,17 +1586,17 @@ pub fn logical_not_at(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> R
 /// Build [`all`] at the location `loc`.
 pub fn all_at(
     conds: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    fold_conditions(conds, loc.into(), "all", logical_and_at)
+    fold_conditions(conds, loc.into_owned_object_ref(), "all", logical_and_at)
 }
 
 /// Build [`any`] at the location `loc`.
 pub fn any_at(
     conds: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    fold_conditions(conds, loc.into(), "any", logical_or_at)
+    fold_conditions(conds, loc.into_owned_object_ref(), "any", logical_or_at)
 }
 
 /// Build [`if_then_else`] at the location `loc`.
@@ -1560,9 +1604,9 @@ pub fn if_then_else_at(
     cond: impl IntoExpr<PrimExpr>,
     true_value: impl IntoExpr<PrimExpr>,
     false_value: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    let (cond, loc) = (cond.into_owned_expr()?, loc.into());
+    let (cond, loc) = (cond.into_owned_expr()?, loc.into_owned_object_ref());
     if !cond.prim_ty().matches_code(&[DLDataTypeCode::kDLBool]) {
         let condition = "cond.ty().MatchesCode(DLDataTypeCode::kDLBool)";
         let message = "if_then_else only accept the condition to be boolean type.";
@@ -1620,9 +1664,9 @@ unlocated! {
 pub fn shift_left_at(
     a: impl Operand,
     b: impl Operand,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     check_operands(&a, &b, "<<", "left shift", "integer", (&INTEGER, INTEGER_CODES))?;
     let (a, b) = match_types_at(a, b, loc.clone())?;
     let ty = a.prim_ty().clone();
@@ -1640,9 +1684,9 @@ pub fn shift_left_at(
 pub fn shift_right_at(
     a: impl Operand,
     b: impl Operand,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    let ((a, b), loc) = (operands(a, b)?, loc.into());
+    let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
     check_operands(&a, &b, ">>", "right shift", "integer", (&INTEGER, INTEGER_CODES))?;
     let (a, b) = match_types_at(a, b, loc.clone())?;
     match fold_shift(&a, &b, |x, y| x.try_shr(y.clone()).map(Some), &loc)? {
@@ -1664,9 +1708,9 @@ macro_rules! bitwise {
             pub fn $at(
                 a: impl Operand,
                 b: impl Operand,
-                loc: impl Into<Location>,
+                loc: impl IntoObjectRef<Location>,
             ) -> Result<PrimExpr> {
-                let ((a, b), loc) = (operands(a, b)?, loc.into());
+                let ((a, b), loc) = (operands(a, b)?, loc.into_owned_object_ref());
                 let accepted = (&INTEGER_OR_BOOL[..], INTEGER_OR_BOOL_CODES);
                 check_operands(&a, &b, $symbol, $what, "integer", accepted)?;
                 let (a, b) = match_types_at(a, b, loc.clone())?;
@@ -1705,7 +1749,10 @@ bitwise!(
 );
 
 /// Build [`bitwise_not`] at the location `loc`.
-pub fn bitwise_not_at(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn bitwise_not_at(
+    a: impl IntoExpr<PrimExpr>,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
     let a = a.into_owned_expr()?;
     check_code(&a, "a", &INTEGER_OR_BOOL, INTEGER_OR_BOOL_CODES, || {
         format!(
@@ -1768,8 +1815,8 @@ macro_rules! unary {
             }
 
             #[doc = concat!("Build [`", stringify!($name), "`] at the location `loc`.")]
-            pub fn $at(x: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<PrimExpr> {
-                $imp(x.into_owned_expr()?, loc.into())
+            pub fn $at(x: impl IntoExpr<PrimExpr>, loc: impl IntoObjectRef<Location>) -> Result<PrimExpr> {
+                $imp(x.into_owned_expr()?, loc.into_owned_object_ref())
             }
         )+
     };
@@ -1826,28 +1873,32 @@ unlocated! {
     /// # Errors
     ///
     /// Returns an `InternalError` if `ty` is a vector or has no largest value.
-    max_value(ty: impl Into<PrimType>) => max_value_at;
+    max_value(ty: impl IntoObjectRef<PrimType>) => max_value_at;
     /// Create the smallest value of the scalar type `ty`.
     ///
     /// # Errors
     ///
     /// Returns an `InternalError` if `ty` is a vector or has no smallest value.
-    min_value(ty: impl Into<PrimType>) => min_value_at;
+    min_value(ty: impl IntoObjectRef<PrimType>) => min_value_at;
     /// Create the positive infinity of the scalar `float16`, `float32` or `float64` type `ty`.
     ///
     /// # Errors
     ///
     /// Returns an `InternalError` if `ty` is a vector or not one of those types.
-    infinity(ty: impl Into<PrimType>) => infinity_at;
+    infinity(ty: impl IntoObjectRef<PrimType>) => infinity_at;
     /// Build the `int32` call `vscale()`, the factor of the lanes of a scalable vector
     /// (`prim.vscale`).
     vscale() => vscale_at;
 }
 
 /// Build [`max_value`] at the location `loc`.
-pub fn max_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let (ty, loc) = (ty.into(), loc.into());
-    check_scalar(&ty)?;
+pub fn max_value_at(
+    ty: impl IntoObjectRef<PrimType>,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let (ty, loc) = (ty.into_object_ref(), loc.into_owned_object_ref());
+    let ty: &PrimType = ty.borrow();
+    check_scalar(ty)?;
     let (code, bits) = (ty.dtype.code, ty.bits());
     let int = |value: BigInt| Ok(IntImm::new(ty.clone(), value, loc.clone())?.into());
     let float = |value: f64| Ok(FloatImm::new(ty.clone(), value, loc.clone())?.into());
@@ -1864,7 +1915,7 @@ pub fn max_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result
         _ => match small_float_bound(code) {
             Some((max, _)) => float(max),
             None => {
-                let message = format!("Cannot decide max_value for type{}", support::repr(&ty));
+                let message = format!("Cannot decide max_value for type{}", support::repr(ty));
                 Err(Error::new(INTERNAL_ERROR, &message, ""))
             }
         },
@@ -1872,9 +1923,13 @@ pub fn max_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result
 }
 
 /// Build [`min_value`] at the location `loc`.
-pub fn min_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let (ty, loc) = (ty.into(), loc.into());
-    check_scalar(&ty)?;
+pub fn min_value_at(
+    ty: impl IntoObjectRef<PrimType>,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let (ty, loc) = (ty.into_object_ref(), loc.into_owned_object_ref());
+    let ty: &PrimType = ty.borrow();
+    check_scalar(ty)?;
     let (code, bits) = (ty.dtype.code, ty.bits());
     let int = |value: BigInt| Ok(IntImm::new(ty.clone(), value, loc.clone())?.into());
     let float = |value: f64| Ok(FloatImm::new(ty.clone(), value, loc.clone())?.into());
@@ -1891,7 +1946,7 @@ pub fn min_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result
             Some((_, true)) => float(0.0),
             Some((max, false)) => float(-max),
             None => {
-                let message = format!("Cannot decide min_value for type{}", support::repr(&ty));
+                let message = format!("Cannot decide min_value for type{}", support::repr(ty));
                 Err(Error::new(INTERNAL_ERROR, &message, ""))
             }
         },
@@ -1899,8 +1954,11 @@ pub fn min_value_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result
 }
 
 /// Build [`infinity`] at the location `loc`.
-pub fn infinity_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<PrimExpr> {
-    let (ty, loc) = (ty.into(), loc.into());
+pub fn infinity_at(
+    ty: impl IntoObjectRef<PrimType>,
+    loc: impl IntoObjectRef<Location>,
+) -> Result<PrimExpr> {
+    let (ty, loc) = (ty.into_owned_object_ref(), loc.into_owned_object_ref());
     check_scalar(&ty)?;
     match (ty.dtype.code, ty.bits()) {
         (support::FLOAT, 64) => Ok(FloatImm::new(ty, f64::INFINITY, loc)?.into()),
@@ -1913,9 +1971,9 @@ pub fn infinity_at(ty: impl Into<PrimType>, loc: impl Into<Location>) -> Result<
 }
 
 /// Build [`vscale`] at the location `loc`.
-pub fn vscale_at(loc: impl Into<Location>) -> Result<PrimExpr> {
+pub fn vscale_at(loc: impl IntoObjectRef<Location>) -> Result<PrimExpr> {
     let ty: Type = PrimType::int(32).into();
-    call(Some(&ty), "prim.vscale", vec![], loc.into())
+    call(Some(&ty), "prim.vscale", vec![], loc.into_owned_object_ref())
 }
 
 unlocated! {
@@ -1943,18 +2001,30 @@ unlocated! {
 pub fn pow_at(
     x: impl IntoExpr<PrimExpr>,
     y: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    float_binary(x.into_owned_expr()?, y.into_owned_expr()?, "prim.pow", "power", loc.into())
+    float_binary(
+        x.into_owned_expr()?,
+        y.into_owned_expr()?,
+        "prim.pow",
+        "power",
+        loc.into_owned_object_ref(),
+    )
 }
 
 /// Build [`fmod`] at the location `loc`.
 pub fn fmod_at(
     x: impl IntoExpr<PrimExpr>,
     y: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
-    float_binary(x.into_owned_expr()?, y.into_owned_expr()?, "prim.fmod", "fmod", loc.into())
+    float_binary(
+        x.into_owned_expr()?,
+        y.into_owned_expr()?,
+        "prim.fmod",
+        "fmod",
+        loc.into_owned_object_ref(),
+    )
 }
 
 /// Build [`fma`] at the location `loc`.
@@ -1962,11 +2032,16 @@ pub fn fma_at(
     x: impl IntoExpr<PrimExpr>,
     y: impl IntoExpr<PrimExpr>,
     z: impl IntoExpr<PrimExpr>,
-    loc: impl Into<Location>,
+    loc: impl IntoObjectRef<Location>,
 ) -> Result<PrimExpr> {
     let x = x.into_owned_expr()?;
     let ty = x.ty.clone();
-    call(Some(&ty), "prim.fma", vec![x, y.into_owned_expr()?, z.into_owned_expr()?], loc.into())
+    call(
+        Some(&ty),
+        "prim.fma",
+        vec![x, y.into_owned_expr()?, z.into_owned_expr()?],
+        loc.into_owned_object_ref(),
+    )
 }
 
 /// `floor`, `ceil`, `round`, `nearbyint` and `trunc`: an integer or a boolean is itself, a float
@@ -2175,11 +2250,11 @@ macro_rules! binary_intrinsics {
             pub fn $at(
                 x: impl IntoExpr<PrimExpr>,
                 y: impl IntoExpr<PrimExpr>,
-                loc: impl Into<Location>,
+                loc: impl IntoObjectRef<Location>,
             ) -> Result<PrimExpr> {
                 let x = x.into_owned_expr()?;
                 let ty = x.ty.clone();
-                call(Some(&ty), $op, vec![x, y.into_owned_expr()?], loc.into())
+                call(Some(&ty), $op, vec![x, y.into_owned_expr()?], loc.into_owned_object_ref())
             }
         )+
     };

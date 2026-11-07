@@ -58,6 +58,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimVar
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 // Loop bounds, conditions and stored values are primitive, as C++ types them: `ForObj` holds a
 // `PrimVar var` and `PrimExpr begin, end, step`.
 // tvm-ffi-stubgen(field): ir.AssertStmt.condition -> PrimExpr
@@ -96,6 +97,7 @@ use tvm_ffi::Array;
 use tvm_ffi::BigInt;
 use tvm_ffi::DLDataTypeCode;
 use tvm_ffi::Error;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -270,16 +272,16 @@ impl Bind {
     /// Returns an `InternalError` if the type of `value` is not structurally equal to the type of
     /// `var`.
     pub fn new(
-        var: impl Into<Var>,
+        var: impl IntoObjectRef<Var>,
         value: impl IntoExpr,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (var, value) = (var.into(), value.into_owned_expr()?);
+        let (var, value) = (var.into_owned_object_ref(), value.into_owned_expr()?);
         if !tvm_ffi::structural_equal(&value.ty, &var.ty)? {
             let condition = "ffi::StructuralEqual()(value->ty, var->ty)";
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
         }
-        Ok(Self::from_fields(loc.into(), var, value))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), var, value))
     }
 }
 
@@ -366,12 +368,16 @@ impl AssertStmt {
     /// Returns an `InternalError` if `condition` is not boolean.
     pub fn new(
         condition: impl IntoExpr<PrimExpr>,
-        error_kind: impl Into<StringImm>,
-        message_parts: impl IntoIterator<Item = impl Into<StringImm>>,
-        loc: impl Into<Location>,
+        error_kind: impl IntoObjectRef<StringImm>,
+        message_parts: impl IntoIterator<Item = impl IntoObjectRef<StringImm>>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (condition, error_kind) = (condition.into_owned_expr()?, error_kind.into());
-        let message_parts = message_parts.into_iter().map(Into::into).collect::<Array<StringImm>>();
+        let (condition, error_kind) =
+            (condition.into_owned_expr()?, error_kind.into_owned_object_ref());
+        let message_parts = message_parts
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<StringImm>>();
         let condition_ty = condition.prim_ty();
         if !condition_ty.matches_code(&[DLDataTypeCode::kDLBool]) {
             let message = format!(
@@ -382,7 +388,7 @@ impl AssertStmt {
             let check = "condition_ty.MatchesCode(DLDataTypeCode::kDLBool)";
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, check, &message));
         }
-        Ok(Self::from_fields(loc.into(), condition, error_kind, message_parts))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), condition, error_kind, message_parts))
     }
 }
 
@@ -527,20 +533,24 @@ impl For {
     /// or the step does not fit or match the type of `var`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        var: impl Into<PrimVar>,
+        var: impl IntoObjectRef<PrimVar>,
         begin: impl IntoExpr<PrimExpr>,
         end: impl IntoExpr<PrimExpr>,
         step: impl IntoExpr<PrimExpr>,
         kind: ForKind,
-        body: impl Into<Stmt>,
+        body: impl IntoObjectRef<Stmt>,
         annotations: Option<&Map<String, Any>>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (var, begin, end, step) =
-            (var.into(), begin.into_owned_expr()?, end.into_owned_expr()?, step.into_owned_expr()?);
+        let (var, begin, end, step) = (
+            var.into_owned_object_ref(),
+            begin.into_owned_expr()?,
+            end.into_owned_expr()?,
+            step.into_owned_expr()?,
+        );
         let var_expr: PrimExpr = var.clone().into();
         let var_ty = var.prim_ty().clone();
-        let body = into_body(body.into())?;
+        let body = into_body(body.into_owned_object_ref())?;
         let annotations = annotations.cloned().unwrap_or_else(Map::new);
         for (expr, field) in [(&var_expr, "var"), (&begin, "begin"), (&end, "end"), (&step, "step")]
         {
@@ -605,7 +615,16 @@ impl For {
         same_type(&end, "var.ty() == end.ty()")?;
         let step = promote(step)?;
         same_type(&step, "var.ty() == step.ty()")?;
-        Ok(Self::from_fields(loc.into(), var, begin, end, step, kind, body, annotations))
+        Ok(Self::from_fields(
+            loc.into_owned_object_ref(),
+            var,
+            begin,
+            end,
+            step,
+            kind,
+            body,
+            annotations,
+        ))
     }
 }
 
@@ -679,16 +698,16 @@ impl While {
     /// Returns an `InternalError` if `condition` is a vector.
     pub fn new(
         condition: impl IntoExpr<PrimExpr>,
-        body: impl Into<Stmt>,
-        loc: impl Into<Location>,
+        body: impl IntoObjectRef<Stmt>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let condition = condition.into_owned_expr()?;
-        let body = into_body(body.into())?;
+        let body = into_body(body.into_owned_object_ref())?;
         if !condition.prim_ty().is_scalar() {
             let check = "condition.ty().IsScalar()";
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, check, ""));
         }
-        Ok(Self::from_fields(loc, condition, body))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), condition, body))
     }
 }
 
@@ -773,7 +792,7 @@ impl TensorStore {
         dest: impl IntoExpr,
         indices: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         value: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         static VALIDATE: support::TypeAttr =
             support::TypeAttr::new("__tvm_tensor_store_validate__");
@@ -797,7 +816,7 @@ impl TensorStore {
             let message = "Packed hook result type mismatch";
             return Err(tvm_ffi::Error::new(tvm_ffi::TYPE_ERROR, message, ""));
         }
-        Ok(Self::from_fields(loc.into(), dest, indices, value))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), dest, indices, value))
     }
 }
 
@@ -900,19 +919,29 @@ impl RegionStmt {
     /// Returns a `ValueError` if `body_params` do not match the parameters the operator gives or a
     /// variable is defined twice, or the error of the operator's validators.
     pub fn new(
-        op: impl Into<Op>,
+        op: impl IntoObjectRef<Op>,
         args: impl IntoIterator<Item = impl IntoExpr>,
-        body_params: impl IntoIterator<Item = impl Into<Var>>,
-        attrs: impl Into<DictAttrs>,
-        body: impl Into<Stmt>,
-        result_vars: impl IntoIterator<Item = impl Into<Var>>,
-        loc: impl Into<Location>,
+        body_params: impl IntoIterator<Item = impl IntoObjectRef<Var>>,
+        attrs: impl IntoObjectRef<DictAttrs>,
+        body: impl IntoObjectRef<Stmt>,
+        result_vars: impl IntoIterator<Item = impl IntoObjectRef<Var>>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (op, attrs, body) = (op.into(), attrs.into(), into_body(body.into())?);
+        let (op, attrs, body) = (
+            op.into_owned_object_ref(),
+            attrs.into_owned_object_ref(),
+            into_body(body.into_owned_object_ref())?,
+        );
         let args =
             args.into_iter().map(IntoExpr::into_owned_expr).collect::<Result<Array<Expr>>>()?;
-        let body_params = body_params.into_iter().map(Into::into).collect::<Array<Var>>();
-        let result_vars = result_vars.into_iter().map(Into::into).collect::<Array<Var>>();
+        let body_params = body_params
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<Var>>();
+        let result_vars = result_vars
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<Var>>();
         let name = op.name.as_str().to_string();
         let expected = region_body_params(&op, &args, &attrs)?;
         if body_params.len() != expected.len() {
@@ -944,7 +973,15 @@ impl RegionStmt {
                 return Err(support::check_failed(tvm_ffi::VALUE_ERROR, condition, message));
             }
         }
-        let region = Self::from_fields(loc.into(), op, args, body_params, attrs, body, result_vars);
+        let region = Self::from_fields(
+            loc.into_owned_object_ref(),
+            op,
+            args,
+            body_params,
+            attrs,
+            body,
+            result_vars,
+        );
         if let Some(validate) = support::NativeHook::of_op(&region.op, "FRegionValidate")? {
             validate.call_void(&region)?;
         }
@@ -1013,9 +1050,13 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(SeqStmt => Stmt);
 impl SeqStmt {
     /// Create the sequence of `seq`, with nested sequences flattened and no-ops (`Evaluate(0)`)
     /// dropped.
-    pub fn new(seq: impl IntoIterator<Item = impl Into<Stmt>>, loc: impl Into<Location>) -> Self {
-        let seq = seq.into_iter().map(Into::into).collect::<Array<Stmt>>();
-        Self::from_fields(loc.into(), flatten(seq))
+    pub fn new(
+        seq: impl IntoIterator<Item = impl IntoObjectRef<Stmt>>,
+        loc: impl IntoObjectRef<Location>,
+    ) -> Self {
+        let seq =
+            seq.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Stmt>>();
+        Self::from_fields(loc.into_owned_object_ref(), flatten(seq))
     }
 }
 
@@ -1092,14 +1133,14 @@ impl If {
     /// Create the statement running `then_case` if `condition` holds, else `else_case` if given.
     pub fn new(
         condition: impl IntoExpr<PrimExpr>,
-        then_case: impl Into<Stmt>,
+        then_case: impl IntoObjectRef<Stmt>,
         else_case: Option<&Stmt>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let condition = condition.into_owned_expr()?;
-        let then_case = into_body(then_case.into())?;
+        let then_case = into_body(then_case.into_owned_object_ref())?;
         let else_case = else_case.map(|stmt| into_body(stmt.clone())).transpose()?;
-        Ok(Self::from_fields(loc.into(), condition, then_case, else_case))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), condition, then_case, else_case))
     }
 }
 
@@ -1162,8 +1203,8 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(Evaluate => Stmt);
 
 impl Evaluate {
     /// Create the statement evaluating `value` for its side effects.
-    pub fn new(value: impl Into<Expr>, loc: impl Into<Location>) -> Self {
-        Self::from_fields(loc.into(), value.into())
+    pub fn new(value: impl IntoObjectRef<Expr>, loc: impl IntoObjectRef<Location>) -> Self {
+        Self::from_fields(loc.into_owned_object_ref(), value.into_owned_object_ref())
     }
 }
 
@@ -1282,8 +1323,8 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(Return => Stmt);
 
 impl Return {
     /// Create the statement returning `value` from the enclosing function.
-    pub fn new(value: impl Into<Expr>, loc: impl Into<Location>) -> Self {
-        Self::from_fields(loc.into(), value.into())
+    pub fn new(value: impl IntoObjectRef<Expr>, loc: impl IntoObjectRef<Location>) -> Self {
+        Self::from_fields(loc.into_owned_object_ref(), value.into_owned_object_ref())
     }
 }
 

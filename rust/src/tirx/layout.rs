@@ -61,6 +61,7 @@
 // A tile layout's offsets are `PrimExpr`s, as C++ `TileLayoutObj` holds them.
 // tvm-ffi-stubgen(field): tirx.TileLayout.offset -> Map<Axis, PrimExpr>
 // tvm-ffi-stubgen(import-object): tvm_ffi::Map
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::IntoExpr;
 use crate::ir::expr::PrimExpr;
@@ -72,6 +73,7 @@ use std::ops::Deref;
 use tvm_ffi::Any;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -203,11 +205,11 @@ impl Layout {
     /// grouped by its shape.
     pub fn tile(
         &self,
-        outer: impl Into<TileLayout>,
+        outer: impl IntoObjectRef<TileLayout>,
         outer_shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
         inner_shape: impl IntoIterator<Item = impl IntoExpr<PrimExpr>>,
     ) -> Result<Layout> {
-        let outer = outer.into();
+        let outer = outer.into_object_ref();
         let outer_shape = outer_shape
             .into_iter()
             .map(IntoExpr::into_owned_expr)
@@ -217,7 +219,7 @@ impl Layout {
             .map(IntoExpr::into_owned_expr)
             .collect::<Result<Array<PrimExpr>>>()?;
         tvm_ffi::cached_global_func!("tirx.LayoutTile")
-            .call_tuple((self, &outer, &outer_shape, &inner_shape))?
+            .call_tuple((self, outer.borrow(), &outer_shape, &inner_shape))?
             .try_into()
     }
 }
@@ -273,12 +275,14 @@ impl TileLayout {
     /// Create the tile layout of the `shard` and `replica` iterators, shifted by `offset`
     /// (`tirx.TileLayout`).
     pub fn new(
-        shard: impl IntoIterator<Item = impl Into<Iter>>,
-        replica: impl IntoIterator<Item = impl Into<Iter>>,
+        shard: impl IntoIterator<Item = impl IntoObjectRef<Iter>>,
+        replica: impl IntoIterator<Item = impl IntoObjectRef<Iter>>,
         offset: &Map<Axis, PrimExpr>,
     ) -> Self {
-        let shard = shard.into_iter().map(Into::into).collect::<Array<Iter>>();
-        let replica = replica.into_iter().map(Into::into).collect::<Array<Iter>>();
+        let shard =
+            shard.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Iter>>();
+        let replica =
+            replica.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Iter>>();
         support::infallible(
             tvm_ffi::cached_global_func!("tirx.TileLayout")
                 .call_tuple((&shard, &replica, offset))
@@ -525,12 +529,12 @@ impl ComposeLayout {
         per_element: i32,
         swizzle_len: i32,
         atom_len: i32,
-        tile_layout: impl Into<TileLayout>,
+        tile_layout: impl IntoObjectRef<TileLayout>,
         swizzle_inner: bool,
     ) -> Result<Self> {
-        let tile_layout = tile_layout.into();
+        let tile_layout = tile_layout.into_object_ref();
         tvm_ffi::cached_global_func!("tirx.ComposeLayout")
-            .call_tuple((per_element, swizzle_len, atom_len, &tile_layout, swizzle_inner))?
+            .call_tuple((per_element, swizzle_len, atom_len, tile_layout.borrow(), swizzle_inner))?
             .try_into()
     }
 }

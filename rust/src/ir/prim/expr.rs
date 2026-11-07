@@ -170,6 +170,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::r#type::PrimTypeObj
 // tvm-ffi-stubgen(import-object): crate::ir::support
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::expr::Expr;
@@ -184,6 +185,7 @@ use crate::ir::support;
 use std::ops::Deref;
 use tvm_ffi::AnyView;
 use tvm_ffi::DLDataTypeCode;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectRefCore;
 use tvm_ffi::Result;
@@ -203,11 +205,11 @@ macro_rules! binary_new {
                 pub fn new(
                     a: impl IntoExpr<PrimExpr>,
                     b: impl IntoExpr<PrimExpr>,
-                    loc: impl Into<Location>,
+                    loc: impl IntoObjectRef<Location>,
                 ) -> Result<Self> {
                     let (a, b) = (a.into_owned_expr()?, b.into_owned_expr()?);
                     let ty = binary_type(stringify!($node), $operands, &a, &b)?;
-                    Ok(Self::from_fields(loc.into(), ty, a, b))
+                    Ok(Self::from_fields(loc.into_owned_object_ref(), ty, a, b))
                 }
             }
         )+
@@ -284,18 +286,18 @@ impl Cast {
     ///
     /// Returns an `InternalError` if `ty` and the type of `value` have different numbers of lanes.
     pub fn new(
-        ty: impl Into<PrimType>,
+        ty: impl IntoObjectRef<PrimType>,
         value: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (ty, value) = (ty.into(), value.into_owned_expr()?);
+        let (ty, value) = (ty.into_owned_object_ref(), value.into_owned_expr()?);
         let value_dtype = value.prim_ty().dtype;
         if ty.dtype.lanes != value_dtype.lanes {
             let condition = "ty->dtype.lanes == value_expr_ty->dtype.lanes";
             let (lhs, rhs) = (ty.dtype.lanes, value_dtype.lanes);
             return Err(support::compare_failed(tvm_ffi::INTERNAL_ERROR, condition, lhs, rhs, ""));
         }
-        Ok(Self::from_fields(loc.into(), ty, value))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, value))
     }
 }
 
@@ -703,7 +705,7 @@ impl BitwiseNot {
     /// # Errors
     ///
     /// Returns a `TypeError` if `a` is not of an integer or boolean type.
-    pub fn new(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<Self> {
+    pub fn new(a: impl IntoExpr<PrimExpr>, loc: impl IntoObjectRef<Location>) -> Result<Self> {
         let a = a.into_owned_expr()?;
         let integer_or_bool =
             [DLDataTypeCode::kDLInt, DLDataTypeCode::kDLUInt, DLDataTypeCode::kDLBool];
@@ -713,7 +715,7 @@ impl BitwiseNot {
             let message = "BitwiseNot requires an integer or boolean operand";
             return Err(support::check_failed(tvm_ffi::TYPE_ERROR, condition, message));
         }
-        Ok(Self::from_fields(loc.into(), a.prim_ty().clone(), a))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), a.prim_ty().clone(), a))
     }
 }
 
@@ -1821,11 +1823,11 @@ impl And {
     pub fn new(
         a: impl IntoExpr<PrimExpr>,
         b: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let (a, b) = (a.into_owned_expr()?, b.into_owned_expr()?);
         let ty = logical_type(&a, &b)?;
-        Ok(Self::from_fields(loc.into(), ty, a, b))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, a, b))
     }
 }
 
@@ -1901,11 +1903,11 @@ impl Or {
     pub fn new(
         a: impl IntoExpr<PrimExpr>,
         b: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let (a, b) = (a.into_owned_expr()?, b.into_owned_expr()?);
         let ty = logical_type(&a, &b)?;
-        Ok(Self::from_fields(loc.into(), ty, a, b))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, a, b))
     }
 }
 
@@ -1975,13 +1977,13 @@ impl Not {
     /// # Errors
     ///
     /// Returns an `InternalError` if `a` is not boolean.
-    pub fn new(a: impl IntoExpr<PrimExpr>, loc: impl Into<Location>) -> Result<Self> {
+    pub fn new(a: impl IntoExpr<PrimExpr>, loc: impl IntoObjectRef<Location>) -> Result<Self> {
         let a = a.into_owned_expr()?;
         if !a.prim_ty().matches_code(&[DLDataTypeCode::kDLBool]) {
             let condition = "a_ty.MatchesCode(DLDataTypeCode::kDLBool)";
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
         }
-        Ok(Self::from_fields(loc.into(), bool_type(a.prim_ty())?, a))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), bool_type(a.prim_ty())?, a))
     }
 }
 
@@ -2080,7 +2082,7 @@ impl Select {
         condition: impl IntoExpr<PrimExpr>,
         true_value: impl IntoExpr<PrimExpr>,
         false_value: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
         let (condition, true_value, false_value) = (
             condition.into_owned_expr()?,
@@ -2118,7 +2120,7 @@ impl Select {
             ));
         }
         let ty = true_ty.clone();
-        Ok(Self::from_fields(loc.into(), ty, condition, true_value, false_value))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, condition, true_value, false_value))
     }
 }
 
@@ -2200,12 +2202,13 @@ impl Let {
     /// Returns an `InternalError` if `value` is not of the type of `var`, or a `TypeError` if the
     /// type of `var` is not a `PrimType`.
     pub fn new(
-        var: impl Into<Var>,
+        var: impl IntoObjectRef<Var>,
         value: impl IntoExpr<PrimExpr>,
         body: impl IntoExpr<PrimExpr>,
-        loc: impl Into<Location>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Result<Self> {
-        let (var, value, body) = (var.into(), value.into_owned_expr()?, body.into_owned_expr()?);
+        let (var, value, body) =
+            (var.into_owned_object_ref(), value.into_owned_expr()?, body.into_owned_expr()?);
         let value_dtype = value.prim_ty().dtype;
         let Some(var_ty) = var.ty.downcast_ref::<PrimTypeObj>() else {
             let message = format!(
@@ -2219,7 +2222,7 @@ impl Let {
             return Err(support::check_failed(tvm_ffi::INTERNAL_ERROR, condition, ""));
         }
         let ty = body.prim_ty().clone();
-        Ok(Self::from_fields(loc.into(), ty, var, value, body))
+        Ok(Self::from_fields(loc.into_owned_object_ref(), ty, var, value, body))
     }
 }
 

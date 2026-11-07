@@ -44,6 +44,7 @@
 // tvm-ffi-stubgen(import-object): tvm_ffi::Error
 // tvm-ffi-stubgen(import-object): tvm_ffi::DLDataTypeCode
 // tvm-ffi-stubgen(import-object): tvm_ffi::VALUE_ERROR
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 
 // tvm-ffi-stubgen(begin): import-section
 use crate::ir::dtype;
@@ -57,6 +58,7 @@ use tvm_ffi::Array;
 use tvm_ffi::DLDataType;
 use tvm_ffi::DLDataTypeCode;
 use tvm_ffi::Error;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
 use tvm_ffi::ObjectRefCore;
@@ -849,8 +851,8 @@ impl PtrType {
     /// # Errors
     ///
     /// Returns an `InternalError` if `element_type` is a [`MissingType`].
-    pub fn new(element_type: impl Into<Type>, scope: &MemoryScope) -> Result<Self> {
-        let element_type = element_type.into();
+    pub fn new(element_type: impl IntoObjectRef<Type>, scope: &MemoryScope) -> Result<Self> {
+        let element_type = element_type.into_owned_object_ref();
         if element_type.downcast_ref::<MissingTypeObj>().is_some() {
             let condition = "!element_type.as<MissingType>().has_value()";
             let message = "PtrType element_type cannot be Type::Missing()";
@@ -919,11 +921,12 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(TupleType => Type);
 impl TupleType {
     /// Create the type of a tuple whose fields have the types `fields`, at `loc`.
     pub fn new(
-        fields: impl IntoIterator<Item = impl Into<Type>>,
-        loc: impl Into<Location>,
+        fields: impl IntoIterator<Item = impl IntoObjectRef<Type>>,
+        loc: impl IntoObjectRef<Location>,
     ) -> Self {
-        let fields = fields.into_iter().map(Into::into).collect::<Array<Type>>();
-        Self::from_fields(loc.into(), fields)
+        let fields =
+            fields.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Type>>();
+        Self::from_fields(loc.into_owned_object_ref(), fields)
     }
 }
 
@@ -992,10 +995,13 @@ impl FuncType {
     /// Create the type of a function from arguments of `arg_types` to a result of `ret_type`, at
     /// the unknown location.
     pub fn new(
-        arg_types: impl IntoIterator<Item = impl Into<Type>>,
-        ret_type: impl Into<Type>,
+        arg_types: impl IntoIterator<Item = impl IntoObjectRef<Type>>,
+        ret_type: impl IntoObjectRef<Type>,
     ) -> Self {
-        let arg_types = arg_types.into_iter().map(Into::into).collect::<Array<Type>>();
-        Self::from_fields(UNKNOWN_LOC, arg_types, ret_type.into())
+        let arg_types = arg_types
+            .into_iter()
+            .map(IntoObjectRef::into_owned_object_ref)
+            .collect::<Array<Type>>();
+        Self::from_fields(UNKNOWN_LOC, arg_types, ret_type.into_owned_object_ref())
     }
 }

@@ -52,6 +52,7 @@
 // tvm-ffi-stubgen(import-object): crate::ir::expr::IntoExpr
 // tvm-ffi-stubgen(import-object): crate::ir::expr::PrimExpr
 // tvm-ffi-stubgen(import-object): std::borrow::Borrow
+// tvm-ffi-stubgen(import-object): tvm_ffi::IntoObjectRef
 // An interval is bounded by `PrimExpr`s, as C++ `IntervalSetObj` holds them.
 // tvm-ffi-stubgen(field): sym.IntervalSet.min_value -> PrimExpr
 // tvm-ffi-stubgen(field): sym.IntervalSet.max_value -> PrimExpr
@@ -66,6 +67,7 @@ use std::borrow::Borrow;
 use std::ops::Deref;
 use tvm_ffi::Array;
 use tvm_ffi::FieldGetter;
+use tvm_ffi::IntoObjectRef;
 use tvm_ffi::Map;
 use tvm_ffi::Object;
 use tvm_ffi::ObjectArc;
@@ -166,10 +168,16 @@ tvm_ffi::unsafe_impl_object_ref_upcast!(IntervalSet => IntSet);
 impl IntervalSet {
     /// Create the interval `[min_value, max_value]`, whose bounds may be [`neg_inf`] and
     /// [`pos_inf`] (`sym.IntervalSet`).
-    pub fn new(min_value: impl Into<PrimExpr>, max_value: impl Into<PrimExpr>) -> Self {
+    pub fn new(
+        min_value: impl IntoObjectRef<PrimExpr>,
+        max_value: impl IntoObjectRef<PrimExpr>,
+    ) -> Self {
         support::infallible(
             tvm_ffi::cached_global_func!("sym.IntervalSet")
-                .call_tuple((&min_value.into(), &max_value.into()))
+                .call_tuple((
+                    min_value.into_object_ref().borrow(),
+                    max_value.into_object_ref().borrow(),
+                ))
                 .and_then(|any| any.try_into()),
         )
     }
@@ -180,12 +188,13 @@ impl IntervalSet {
 ///
 /// Without an `analyzer`, a fresh one proves.
 pub fn estimate_region_lower_bound(
-    region: impl IntoIterator<Item = impl Into<Range>>,
+    region: impl IntoIterator<Item = impl IntoObjectRef<Range>>,
     var_dom: &Map<Var, Range>,
     predicate: impl IntoExpr<PrimExpr>,
     analyzer: Option<&Analyzer>,
 ) -> Result<Option<Array<IntSet>>> {
-    let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
+    let region =
+        region.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionLowerBound")
         .call_tuple((&region, var_dom, predicate.into_expr()?.borrow(), analyzer.cloned()))?
         .try_into()
@@ -194,12 +203,13 @@ pub fn estimate_region_lower_bound(
 /// Return the exact region a set of affine accesses covers, given the domains of their variables
 /// and a predicate, or `None` when the accesses are not affine (`sym.EstimateRegionStrictBound`).
 pub fn estimate_region_strict_bound(
-    region: impl IntoIterator<Item = impl Into<Range>>,
+    region: impl IntoIterator<Item = impl IntoObjectRef<Range>>,
     var_dom: &Map<Var, Range>,
     predicate: impl IntoExpr<PrimExpr>,
     analyzer: Option<&Analyzer>,
 ) -> Result<Option<Array<IntSet>>> {
-    let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
+    let region =
+        region.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionStrictBound")
         .call_tuple((&region, var_dom, predicate.into_expr()?.borrow(), analyzer.cloned()))?
         .try_into()
@@ -208,12 +218,13 @@ pub fn estimate_region_strict_bound(
 /// Return a region that holds what a set of accesses covers, given the domains of their variables
 /// and a predicate, also when the accesses are not affine (`sym.EstimateRegionUpperBound`).
 pub fn estimate_region_upper_bound(
-    region: impl IntoIterator<Item = impl Into<Range>>,
+    region: impl IntoIterator<Item = impl IntoObjectRef<Range>>,
     var_dom: &Map<Var, Range>,
     predicate: impl IntoExpr<PrimExpr>,
     analyzer: Option<&Analyzer>,
 ) -> Result<Array<IntSet>> {
-    let region = region.into_iter().map(Into::into).collect::<Array<Range>>();
+    let region =
+        region.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<Range>>();
     tvm_ffi::cached_global_func!("sym.EstimateRegionUpperBound")
         .call_tuple((&region, var_dom, predicate.into_expr()?.borrow(), analyzer.cloned()))?
         .try_into()
@@ -231,8 +242,11 @@ pub fn neg_inf() -> Result<PrimExpr> {
 
 /// Return a subset of the union of `sets`, which may drop some of their segments
 /// (`sym.UnionLowerBound`).
-pub fn union_lower_bound(sets: impl IntoIterator<Item = impl Into<IntSet>>) -> Result<IntSet> {
-    let sets = sets.into_iter().map(Into::into).collect::<Array<IntSet>>();
+pub fn union_lower_bound(
+    sets: impl IntoIterator<Item = impl IntoObjectRef<IntSet>>,
+) -> Result<IntSet> {
+    let sets =
+        sets.into_iter().map(IntoObjectRef::into_owned_object_ref).collect::<Array<IntSet>>();
     tvm_ffi::cached_global_func!("sym.UnionLowerBound").call_tuple((&sets,))?.try_into()
 }
 
