@@ -242,6 +242,34 @@ def test_a_backoff_still_closes_the_acquire_after_the_last_poll():
     assert macro.index("if (predicate) break;") < macro.index("_acquire(")
 
 
+def test_a_wait_with_and_one_without_a_backoff_share_a_kernel():
+    """Each form names its own helpers, so both may wait on one word in a kernel."""
+
+    @T.function
+    def kernel(state: T.Tensor((1,), "int32"), participants: T.int32):
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=2, block=32))
+        lane = T.cuda.thread_idx("x")
+        spin = T.alloc_local((1,), "int32")
+        if lane == 0:
+            spin[0] = T.int32(0)
+            T.ptx.red.release.gpu.global_.add.s32(state.ptr_to([0]), T.int32(1))
+            T.cuda.wait_until(
+                spin[0], state.ptr_to([0]), predicate=lambda v: v >= participants, scope="gpu"
+            )
+            T.ptx.red.release.gpu.global_.add.s32(state.ptr_to([0]), T.int32(1))
+            T.cuda.wait_until(
+                spin[0],
+                state.ptr_to([0]),
+                predicate=lambda v: v >= participants * T.int32(2),
+                scope="gpu",
+                backoff_ns=40,
+            )
+
+    # NVRTC rejects the module if both forms define the same `_acquire` helper.
+    source = build(kernel)
+    assert "_backoff_load(" in source and "_backoff_acquire(" in source
+
+
 def test_a_wait_may_test_against_a_thread_local_scalar():
     """A barrier tests the counter against its loop-carried phase.
 

@@ -249,8 +249,12 @@ def wait_until(dst, ptr, condition, scope, space, ptx_type, backoff_ns):
     else:
         # Between polls, never before the first one and never after the last:
         # the shape `allgather_gemm` and `gemm_reduce_scatter` write by hand.
-        name = f"{name}_backoff"
-        source = source.replace(f"{name[: -len('_backoff')]}_load", f"{name}_load")
+        # Both helpers move to the new name: a wait on the same word without a
+        # backoff defines `_load` and `_acquire` under the old one, and the two
+        # waits may share a kernel.
+        base, name = name, f"{name}_backoff"
+        source = source.replace(f"{base}_", f"{name}_")
+        closing = closing.replace(f"{base}_", f"{name}_")
         source += (
             f"\n#define {name}(dst, ptr, predicate, backoff_ns) "
             f"do {{ {name}_load((dst), (ptr)); if (!(predicate)) {{ "

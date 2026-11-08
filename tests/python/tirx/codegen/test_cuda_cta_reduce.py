@@ -202,3 +202,72 @@ def test_cta_sum_all_warp_counts(num_warps):
     result, _ = _build_and_run(func, N)
     expected = np.float32(N * (N + 1) / 2)
     np.testing.assert_allclose(result, np.full(N, expected))
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not env.has_cuda(), reason="need cuda")
+def test_cta_sum_beside_warp_sum():
+    """cta_reduce embeds the 32-lane warp_reduce helper; calling both in one
+    kernel must still define that helper once."""
+    NUM_WARPS = 4
+    N = NUM_WARPS * 32
+
+    # fmt: off
+    @T.function
+    def func(out: T.Tensor((2 * N,), "float32")):
+
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=N))
+        tid = T.cuda.thread_idx("x")
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((NUM_WARPS,), "float32", scope="shared")])
+        val: T.f32 = T.float32(tid + 1)
+        warp_val: T.f32 = T.cuda.warp_sum(val)
+        cta_val: T.f32 = T.cuda.cta_sum(val, NUM_WARPS, scratch.ptr_to([0]))
+        out[tid] = cta_val
+        out[N + tid] = warp_val
+        # fmt: on
+
+    result, _ = _build_and_run(func, 2 * N)
+    vals = np.arange(1, N + 1, dtype="float32")
+    warp_sums = np.repeat(vals.reshape(NUM_WARPS, 32).sum(axis=1), 32)
+    np.testing.assert_allclose(result[:N], np.full(N, vals.sum()))
+    np.testing.assert_allclose(result[N:], warp_sums)
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not env.has_cuda(), reason="need cuda")
+def test_cta_sum_with_two_warp_counts_in_one_module():
+    """The kernels of a module share one source, so cta_reduce helpers for two
+    warp counts must not both define the warp_reduce helper they embed."""
+
+    def make(num_warps):
+        n = num_warps * 32
+
+        # fmt: off
+        @T.function
+        def func(out: T.Tensor((n,), "float32")):
+
+            T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=n))
+            tid = T.cuda.thread_idx("x")
+            scratch = T.alloc_tensor(ty_args=[T.Tensor((num_warps,), "float32", scope="shared")])
+            val: T.f32 = T.float32(tid + 1)
+            out[tid] = T.cuda.cta_sum(val, num_warps, scratch.ptr_to([0]))
+            # fmt: on
+
+        return func.with_attr("global_symbol", f"cta_sum_{num_warps}")
+
+    warp_counts = (2, 4)
+    mod = tvm_tirx.IRModule({f"cta_sum_{nw}": make(nw) for nw in warp_counts})
+    mod = tvm_tirx.compile(mod, target=TARGET, pipeline="tirx")
+
+    def run():
+        dev = tvm_tirx.cuda(0)
+        results = {}
+        for nw in warp_counts:
+            out = tvm_tirx.runtime.tensor(np.zeros(nw * 32, dtype="float32"), device=dev)
+            mod[f"cta_sum_{nw}"](out)
+            results[nw] = out.numpy()
+        return results
+
+    for nw, result in tvm_tirx.testing.run_with_gpu_lock(run).items():
+        n = nw * 32
+        np.testing.assert_allclose(result, np.full(n, n * (n + 1) / 2))
