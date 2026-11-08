@@ -70,8 +70,15 @@ def _validate_op(op_str, context):
 
 
 def _warp_reduce_source(func_name, width_int, step_expr):
+    # Helpers are deduplicated by name and emitted in no fixed order, so
+    # cta_reduce carries its own copy of this definition. The guard keeps a
+    # kernel that also calls warp_reduce, or cta_reduce with another warp
+    # count, from defining the template twice.
+    guard = f"{func_name.upper()}_DEFINED"
     return (
-        f"\ntemplate <typename T>\n"
+        f"\n#ifndef {guard}\n"
+        f"#define {guard}\n"
+        "template <typename T>\n"
         f"__forceinline__ __device__ T {func_name}(T val) {{\n"
         f"    #pragma unroll\n"
         f"    for (int mask = {width_int} >> 1; mask > 0; mask >>= 1) {{\n"
@@ -80,6 +87,7 @@ def _warp_reduce_source(func_name, width_int, step_expr):
         "    }\n"
         "    return val;\n"
         "}\n"
+        "#endif\n"
     )
 
 
