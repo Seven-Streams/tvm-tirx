@@ -55,11 +55,14 @@ device_intrinsic(
 # match the operand-driven C signature pattern.
 # =============================================================================
 
-# (accumulation expression, identity value for cross-warp padding)
+# (accumulation expression, padding for the lanes past the warp count in the
+# cross-warp step). max and min pad with a partial that is already reduced,
+# which leaves the result unchanged for every T; an infinity would convert an
+# integer T through float and lose its low bits.
 _OP_TABLE = {
     "sum": ("val += shuffled;", "T(0)"),
-    "max": ("val = max(val, shuffled);", "-INFINITY"),
-    "min": ("val = min(val, shuffled);", "INFINITY"),
+    "max": ("val = max(val, shuffled);", "scratch[0]"),
+    "min": ("val = min(val, shuffled);", "scratch[0]"),
 }
 
 

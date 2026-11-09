@@ -271,3 +271,38 @@ def test_cta_sum_with_two_warp_counts_in_one_module():
     for nw, result in tvm_tirx.testing.run_with_gpu_lock(run).items():
         n = nw * 32
         np.testing.assert_allclose(result, np.full(n, n * (n + 1) / 2))
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not env.has_cuda(), reason="need cuda")
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("num_warps", [2, 4])
+def test_cta_extremum_of_int32_above_float_precision(op, num_warps):
+    """Integer max and min are exact across warps: the cross-warp step must not
+    convert int32 values through float, which keeps only 24 bits."""
+    N = num_warps * 32
+    base = 16777217  # 2**24 + 1: neighbouring odd values share one float32
+    sign = 1 if op == "max" else -1
+    cta_reduce = T.cuda.cta_max if op == "max" else T.cuda.cta_min
+
+    # fmt: off
+    @T.function
+    def func(out: T.Tensor((N,), "int32")):
+
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=N))
+        tid = T.cuda.thread_idx("x")
+        scratch = T.alloc_tensor(ty_args=[T.Tensor((num_warps,), "int32", scope="shared")])
+        val: T.int32 = T.int32(sign) * (T.int32(base) + tid * 2)
+        out[tid] = cta_reduce(val, num_warps, scratch.ptr_to([0]))
+        # fmt: on
+
+    mod = tvm_tirx.compile(tvm_tirx.IRModule({"main": func}), target=TARGET, pipeline="tirx")
+    assert "INFINITY" not in mod.mod.imports[0].inspect_source()
+
+    def run():
+        out = tvm_tirx.runtime.tensor(np.zeros(N, dtype="int32"), device=tvm_tirx.cuda(0))
+        mod(out)
+        return out.numpy()
+
+    result = tvm_tirx.testing.run_with_gpu_lock(run)
+    np.testing.assert_array_equal(result, np.full(N, sign * (base + 2 * (N - 1)), dtype="int32"))
