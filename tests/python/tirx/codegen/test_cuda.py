@@ -533,6 +533,23 @@ def test_cuda_handle_uint64_reinterpret_codegen():
 
 
 @pytest.mark.gpu
+def test_cuda_reinterpret_constant_codegen():
+    """A reinterpret prints ``*(T *)&(value)``; a constant operand is declared first, since the
+    address of a literal does not compile."""
+
+    @T.function
+    def main(A: T.Tensor((1,), "uint32")):
+        T.device_entry(launch=T.cuda.LaunchConfig(grid=1, block=32))
+        tx = T.cuda.thread_idx("x")
+        if tx == 0:
+            A[0] = T.reinterpret(T.float32(3.0), ty="uint32")
+
+    src, _ = _get_source(main)
+    assert "(&(0x" not in src
+    assert re.search(r"\(\*\(uint \*\)\(&\(v_\w*\)\)\)", src)
+
+
+@pytest.mark.gpu
 @pytest.mark.skipif(not env.has_cuda(), reason="need cuda")
 def test_cuda_atomic_add():
     @T.function

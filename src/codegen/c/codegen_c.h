@@ -275,6 +275,15 @@ class CodeGenC : public tvm::ExprFunctor<void(const Expr&, std::ostream&)>,
    * \return The variable or literal holding the expression's value.
    */
   std::string PrintExprToSSA(const Expr& expr);
+  /*!
+   * \brief Print an expression to an addressable variable.
+   *
+   * Like PrintExprToSSA, but a constant, which PrintExprToSSA returns as a literal, is first
+   * declared as a variable, so that the result can be the operand of `&`.
+   * \param expr The expression to print.
+   * \return The variable holding the expression's value.
+   */
+  std::string PrintExprToAddressable(const PrimExpr& expr);
 
   /*! \brief Print a C string literal with proper escaping of special chars. */
   void PrintEscapedCString(const std::string& str, std::ostream& os);

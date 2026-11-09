@@ -1422,7 +1422,7 @@ void CodeGenCUDA::Dispatch_(const CallObj* op, std::ostream& os) {
     if (lanes == 1) {
       // The case of lane=1 is same as the normal reinterpret,
       // except that we allow the src and dst dtype to have different number of bits.
-      std::string rhs = PrintExprToSSA(value);
+      std::string rhs = PrintExprToAddressable(value);
       os << "(*(";
       this->PrintType(tgt_ty, os);
       os << " *)(&(" << rhs << ")))";

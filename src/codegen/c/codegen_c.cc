@@ -242,6 +242,16 @@ std::string CodeGenC::PrintExprToSSA(const Expr& expr) {
   return CodeGenSourceBase::SSAGetID(std::move(source), expr->ty, can_reuse);
 }
 
+std::string CodeGenC::PrintExprToAddressable(const PrimExpr& expr) {
+  std::string value = PrintExprToSSA(expr);
+  if (!expr.as<IntImmObj>() && !expr.as<FloatImmObj>()) return value;
+  // Constants are marked as their own SSA names (MarkConst), so PrintExprToSSA returns the literal.
+  std::string vid = name_supply_->FreshName("v_");
+  this->PrintIndent();
+  PrintSSAAssign(vid, value, expr.ty());
+  return vid;
+}
+
 void CodeGenC::PrintExpr(const Expr& n, std::ostream& os) {  // NOLINT(*)
   if (auto prim = n.as<PrimExpr>()) {
     PrintExpr(prim.value(), os);
@@ -907,7 +917,7 @@ void CodeGenC::Dispatch_(const CallObj* op, std::ostream& os) {  // NOLINT(*)
                         source_dtype.lanes() * source_dtype.bits())
           << "reinterpret expects source and target to have the same number of bits";
       int ssa_scope = BeginScope();
-      std::string rhs = PrintExprToSSA(op->args[0]);
+      std::string rhs = PrintExprToAddressable(op->args[0].as_or_throw<PrimExpr>());
       os << "(*(";
       this->PrintType(target_dtype, os);
       os << " *)(&(" << rhs << ")))";

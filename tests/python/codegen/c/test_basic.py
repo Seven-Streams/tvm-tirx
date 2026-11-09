@@ -91,6 +91,32 @@ def test_reinterpret():
     check_c()
 
 
+def test_reinterpret_constant():
+    """A reinterpret prints ``*(T *)&(value)``; a constant operand is declared first, since the
+    address of a literal does not compile."""
+
+    @I.ir_module
+    class Module:
+        @T.function
+        def main(A: T.Tensor((2,), "uint32"), B: T.Tensor((2,), "float32")):
+            T.func_attr({"tirx.noalias": True})
+            for i in range(2):
+                A[i] = T.reinterpret(T.float32(3.0), ty="uint32")
+                B[i] = T.reinterpret(T.uint32(0x40400000), ty="float32")
+
+    mhost = tvm_tirx.compile(Module, target="c")
+    temp = utils.tempdir()
+    path_dso = temp.relpath("temp.so")
+    mhost.export_library(path_dso)
+    m = tvm_tirx.runtime.load_module(path_dso)
+    dev = tvm_tirx.cpu(0)
+    a = tvm_tirx.runtime.tensor(np.zeros(2, dtype="uint32"), dev)
+    b = tvm_tirx.runtime.tensor(np.zeros(2, dtype="float32"), dev)
+    m["main"](a, b)
+    np.testing.assert_array_equal(a.numpy(), [0x40400000, 0x40400000])
+    np.testing.assert_array_equal(b.numpy(), [3.0, 3.0])
+
+
 def test_ceil():
     nn = 1024
 
