@@ -163,8 +163,13 @@ def cast_to_uint8(f8_dtype: str, promote_dtype: str, v):
             rounding_bias = T.bitwise_and(
                 T.shift_right(uint16_v, T.uint16(8)), T.uint16(1)
             ) + T.uint16(0x7F)
-            uint16_v = uint16_v + rounding_bias
-            return T.Cast("uint8", T.shift_right(uint16_v, T.uint16(8)))
+            rounded = T.Cast("uint8", T.shift_right(uint16_v + rounding_bias, T.uint16(8)))
+            # NaNs are truncated with the quiet bit set: rounding them could carry into the sign.
+            is_nan = T.bitwise_and(uint16_v, T.uint16(0x7FFF)) > T.uint16(0x7C00)
+            quiet_nan = T.bitwise_or(
+                T.Cast("uint8", T.shift_right(uint16_v, T.uint16(8))), T.uint8(0x2)
+            )
+            return T.Select(is_nan, quiet_nan, rounded)
         else:  # promote_dtype == "float32"
             uint32_v = T.reinterpret(v, ty="uint32")
             rounding_bias = T.bitwise_and(

@@ -64,6 +64,7 @@ PrimExpr DTypeConversion(PrimExpr src_value, PrimType tgt_dtype, RoundingMode ro
   int mantissa_delta = tgt_fp.mantissa - src_fp.mantissa;
   PrimType src_uint = GetStorageUIntDType(src_dtype), tgt_uint = GetStorageUIntDType(tgt_dtype);
   PrimExpr src_uint_value = ReinterpretAsUInt(src_value);
+  PrimExpr src_bits = src_uint_value;  // before rounding
   if (mantissa_delta < 0) {
     // use rounding
     TVM_FFI_ICHECK(round_mode == RoundingMode::kHalfToEven)
@@ -84,6 +85,19 @@ PrimExpr DTypeConversion(PrimExpr src_value, PrimType tgt_dtype, RoundingMode ro
       ret = ret + (MakeConst(tgt_uint, bias_delta) << tgt_fp.mantissa);
     } else if (bias_delta < 0) {
       ret = ret - (MakeConst(tgt_uint, -bias_delta) << tgt_fp.mantissa);
+    }
+    if (mantissa_delta < 0 && src_fp.nan_style == FloatConfig::NaNStyle::kIEEE &&
+        tgt_fp.nan_style == FloatConfig::NaNStyle::kIEEE && src_fp.bits() < 64) {
+      // Rounding adds to the bits, which carries a NaN with a large payload into the sign
+      // (float32 0x7fffffff would become bfloat16 0x8000, -0.0). Truncate NaNs instead and set
+      // the quiet bit, so that they stay NaN.
+      int64_t magnitude_mask = (int64_t(1) << (src_fp.exponent + src_fp.mantissa)) - 1;
+      int64_t infinity = ((int64_t(1) << src_fp.exponent) - 1) << src_fp.mantissa;
+      PrimExpr is_nan =
+          (src_bits & MakeConst(src_uint, magnitude_mask)) > MakeConst(src_uint, infinity);
+      PrimExpr quiet_nan = cast(src_bits >> (-mantissa_delta), tgt_uint) |
+                           MakeConst(tgt_uint, int64_t(1) << (tgt_fp.mantissa - 1));
+      ret = Select(is_nan, quiet_nan, ret);
     }
     return tirx::reinterpret(tgt_dtype, ret);
   } else {

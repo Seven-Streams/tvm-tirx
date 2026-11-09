@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import numpy as np
+
 import tvm_tirx
 import tvm_tirx.script
 from tvm_tirx.script import ir as I
@@ -39,8 +41,11 @@ def f32tou16(v):
         1, "uint32"
     )
     rounding_bias += tvm_tirx.tirx.const(0x7FFF, "uint32")
-    uint32_v = uint32_v + rounding_bias
-    return (uint32_v >> tvm_tirx.tirx.const(16, "uint32")).astype("uint16")
+    rounded = ((uint32_v + rounding_bias) >> tvm_tirx.tirx.const(16, "uint32")).astype("uint16")
+    # NaNs are truncated with the quiet bit set: rounding them could carry into the sign.
+    is_nan = T.bitwise_and(uint32_v, T.uint32(0x7FFFFFFF)) > T.uint32(0x7F800000)
+    quiet_nan = T.bitwise_or((uint32_v >> T.uint32(16)).astype("uint16"), T.uint16(0x40))
+    return T.Select(is_nan, quiet_nan, rounded)
 
 
 def f32tobf16(v):
@@ -202,20 +207,31 @@ def test_bf16_masked_load_store_will_legalize():
             T.masked_store(
                 C,
                 T.reinterpret(
-                    T.Cast(
-                        "uint16x4",
+                    T.Select(
                         T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
-                        + (
-                            (
-                                T.reinterpret(
-                                    T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4"
-                                )
-                                >> T.Broadcast(T.uint32(16), 4)
-                                & T.Broadcast(T.uint32(1), 4)
-                            )
-                            + T.Broadcast(T.uint32(32767), 4)
+                        & T.Broadcast(T.uint32(0x7FFFFFFF), 4)
+                        > T.Broadcast(T.uint32(0x7F800000), 4),
+                        T.Cast(
+                            "uint16x4",
+                            T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
+                            >> T.Broadcast(T.uint32(16), 4),
                         )
-                        >> T.Broadcast(T.uint32(16), 4),
+                        | T.Broadcast(T.uint16(0x40), 4),
+                        T.Cast(
+                            "uint16x4",
+                            T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
+                            + (
+                                (
+                                    T.reinterpret(
+                                        T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4"
+                                    )
+                                    >> T.Broadcast(T.uint32(16), 4)
+                                    & T.Broadcast(T.uint32(1), 4)
+                                )
+                                + T.Broadcast(T.uint32(32767), 4)
+                            )
+                            >> T.Broadcast(T.uint32(16), 4),
+                        ),
                     ),
                     ty="bfloat16x4",
                 ),
@@ -247,18 +263,31 @@ def test_bf16_masked_load_store_will_legalize():
             )
             T.masked_store(
                 C,
-                T.Cast(
-                    "uint16x4",
+                T.Select(
                     T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
-                    + (
-                        (
-                            T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
-                            >> T.Broadcast(T.uint32(16), 4)
-                            & T.Broadcast(T.uint32(1), 4)
-                        )
-                        + T.Broadcast(T.uint32(32767), 4)
+                    & T.Broadcast(T.uint32(0x7FFFFFFF), 4)
+                    > T.Broadcast(T.uint32(0x7F800000), 4),
+                    T.Cast(
+                        "uint16x4",
+                        T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
+                        >> T.Broadcast(T.uint32(16), 4),
                     )
-                    >> T.Broadcast(T.uint32(16), 4),
+                    | T.Broadcast(T.uint16(0x40), 4),
+                    T.Cast(
+                        "uint16x4",
+                        T.reinterpret(T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4")
+                        + (
+                            (
+                                T.reinterpret(
+                                    T.masked_load(B, T.Ramp(0, 1, 4), mask[0]), ty="uint32x4"
+                                )
+                                >> T.Broadcast(T.uint32(16), 4)
+                                & T.Broadcast(T.uint32(1), 4)
+                            )
+                            + T.Broadcast(T.uint32(32767), 4)
+                        )
+                        >> T.Broadcast(T.uint32(16), 4),
+                    ),
                 ),
                 T.Ramp(0, 1, 4),
                 mask[0],
@@ -594,3 +623,25 @@ if __name__ == "__main__":
     test_bf16_storage_compute_scope_wont_legalize()
     test_bf16_reduce_will_legalize()
     test_bf16_reduce_wont_legalize()
+
+
+def test_bf16_legalize_keeps_nan():
+    """Rounding float32 to bfloat16 adds to the bits; NaNs must stay NaN rather than carry into
+    the sign (0x7fffffff -> -0.0) or the exponent (0x7f800001 -> inf)."""
+
+    @I.ir_module
+    class Module:
+        @T.function
+        def main(A: T.Tensor((5,), "float32"), B: T.Tensor((5,), "bfloat16")):
+            for i in range(5):
+                B[i] = T.Cast("bfloat16", A[i])
+
+    f = tvm_tirx.compile(Module, target="llvm")  # LLVM lowers bfloat16 through the legalizer
+    bits = np.array([0x7FFFFFFF, 0x7F800001, 0xFFC00000, 0x7F800000, 0x3F800000], dtype="uint32")
+    dev = tvm_tirx.cpu(0)
+    a = tvm_tirx.runtime.tensor(bits.view("float32"), dev)
+    b = tvm_tirx.runtime.empty((5,), "bfloat16", dev)
+    f(a, b)
+    np.testing.assert_array_equal(
+        b.numpy().view("uint16"), [0x7FFF, 0x7FC0, 0xFFC0, 0x7F80, 0x3F80]
+    )
